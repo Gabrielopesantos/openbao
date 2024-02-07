@@ -36,7 +36,6 @@ import (
 	"golang.org/x/crypto/ed25519"
 	"golang.org/x/crypto/hkdf"
 
-	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/go-uuid"
 	"github.com/openbao/openbao/sdk/helper/errutil"
 	"github.com/openbao/openbao/sdk/helper/jsonutil"
@@ -68,7 +67,6 @@ const (
 	KeyType_ECDSA_P521
 	KeyType_AES128_GCM96
 	KeyType_RSA3072
-	KeyType_MANAGED_KEY
 	KeyType_HMAC
 )
 
@@ -89,10 +87,6 @@ type AssociatedDataFactory interface {
 	GetAssociatedData() ([]byte, error)
 }
 
-type ManagedKeyFactory interface {
-	GetManagedKeyParameters() ManagedKeyParameters
-}
-
 type RestoreInfo struct {
 	Time    time.Time `json:"time"`
 	Version int       `json:"version"`
@@ -104,11 +98,10 @@ type BackupInfo struct {
 }
 
 type SigningOptions struct {
-	HashAlgorithm    HashType
-	Marshaling       MarshalingType
-	SaltLength       int
-	SigAlgorithm     string
-	ManagedKeyParams ManagedKeyParameters
+	HashAlgorithm HashType
+	Marshaling    MarshalingType
+	SaltLength    int
+	SigAlgorithm  string
 }
 
 type SigningResult struct {
@@ -124,7 +117,7 @@ type KeyType int
 
 func (kt KeyType) EncryptionSupported() bool {
 	switch kt {
-	case KeyType_AES128_GCM96, KeyType_AES256_GCM96, KeyType_ChaCha20_Poly1305, KeyType_RSA2048, KeyType_RSA3072, KeyType_RSA4096, KeyType_MANAGED_KEY:
+	case KeyType_AES128_GCM96, KeyType_AES256_GCM96, KeyType_ChaCha20_Poly1305, KeyType_RSA2048, KeyType_RSA3072, KeyType_RSA4096:
 		return true
 	}
 	return false
@@ -132,7 +125,7 @@ func (kt KeyType) EncryptionSupported() bool {
 
 func (kt KeyType) DecryptionSupported() bool {
 	switch kt {
-	case KeyType_AES128_GCM96, KeyType_AES256_GCM96, KeyType_ChaCha20_Poly1305, KeyType_RSA2048, KeyType_RSA3072, KeyType_RSA4096, KeyType_MANAGED_KEY:
+	case KeyType_AES128_GCM96, KeyType_AES256_GCM96, KeyType_ChaCha20_Poly1305, KeyType_RSA2048, KeyType_RSA3072, KeyType_RSA4096:
 		return true
 	}
 	return false
@@ -140,7 +133,7 @@ func (kt KeyType) DecryptionSupported() bool {
 
 func (kt KeyType) SigningSupported() bool {
 	switch kt {
-	case KeyType_ECDSA_P256, KeyType_ECDSA_P384, KeyType_ECDSA_P521, KeyType_ED25519, KeyType_RSA2048, KeyType_RSA3072, KeyType_RSA4096, KeyType_MANAGED_KEY:
+	case KeyType_ECDSA_P256, KeyType_ECDSA_P384, KeyType_ECDSA_P521, KeyType_ED25519, KeyType_RSA2048, KeyType_RSA3072, KeyType_RSA4096:
 		return true
 	}
 	return false
@@ -148,7 +141,7 @@ func (kt KeyType) SigningSupported() bool {
 
 func (kt KeyType) HashSignatureInput() bool {
 	switch kt {
-	case KeyType_ECDSA_P256, KeyType_ECDSA_P384, KeyType_ECDSA_P521, KeyType_RSA2048, KeyType_RSA3072, KeyType_RSA4096, KeyType_MANAGED_KEY:
+	case KeyType_ECDSA_P256, KeyType_ECDSA_P384, KeyType_ECDSA_P521, KeyType_RSA2048, KeyType_RSA3072, KeyType_RSA4096:
 		return true
 	}
 	return false
@@ -164,7 +157,7 @@ func (kt KeyType) DerivationSupported() bool {
 
 func (kt KeyType) AssociatedDataSupported() bool {
 	switch kt {
-	case KeyType_AES128_GCM96, KeyType_AES256_GCM96, KeyType_ChaCha20_Poly1305, KeyType_MANAGED_KEY:
+	case KeyType_AES128_GCM96, KeyType_AES256_GCM96, KeyType_ChaCha20_Poly1305:
 		return true
 	}
 	return false
@@ -202,8 +195,6 @@ func (kt KeyType) String() string {
 		return "rsa-4096"
 	case KeyType_HMAC:
 		return "hmac"
-	case KeyType_MANAGED_KEY:
-		return "managed_key"
 	}
 
 	return "[unknown]"
@@ -990,7 +981,6 @@ func (p *Policy) DecryptWithFactory(context, nonce []byte, value string, factori
 				if err != nil {
 					return "", errutil.InternalError{Err: fmt.Sprintf("unable to get associated_data/additional_data from factory[%d]: %v", index, err)}
 				}
-			case ManagedKeyFactory:
 			default:
 				return "", errutil.InternalError{Err: fmt.Sprintf("unknown type of factory[%d]: %T", index, rawFactory)}
 			}
@@ -1013,34 +1003,6 @@ func (p *Policy) DecryptWithFactory(context, nonce []byte, value string, factori
 		if err != nil {
 			return "", errutil.InternalError{Err: fmt.Sprintf("failed to RSA decrypt the ciphertext: %v", err)}
 		}
-	case KeyType_MANAGED_KEY:
-		keyEntry, err := p.safeGetKeyEntry(ver)
-		if err != nil {
-			return "", err
-		}
-		var aad []byte
-		var managedKeyFactory ManagedKeyFactory
-		for _, f := range factories {
-			switch factory := f.(type) {
-			case AssociatedDataFactory:
-				aad, err = factory.GetAssociatedData()
-				if err != nil {
-					return "", err
-				}
-			case ManagedKeyFactory:
-				managedKeyFactory = factory
-			}
-		}
-
-		if managedKeyFactory == nil {
-			return "", errors.New("key type is managed_key, but managed key parameters were not provided")
-		}
-
-		plain, err = p.decryptWithManagedKey(managedKeyFactory.GetManagedKeyParameters(), keyEntry, decoded, nonce, aad)
-		if err != nil {
-			return "", err
-		}
-
 	default:
 		return "", errutil.InternalError{Err: fmt.Sprintf("unsupported key type %v", p.Type)}
 	}
@@ -1243,17 +1205,6 @@ func (p *Policy) SignWithOptions(ver int, context, input []byte, options *Signin
 			return nil, errutil.InternalError{Err: fmt.Sprintf("unsupported rsa signature algorithm %s", sigAlgorithm)}
 		}
 
-	case KeyType_MANAGED_KEY:
-		keyEntry, err := p.safeGetKeyEntry(ver)
-		if err != nil {
-			return nil, err
-		}
-
-		sig, err = p.signWithManagedKey(options, keyEntry, input)
-		if err != nil {
-			return nil, err
-		}
-
 	default:
 		return nil, fmt.Errorf("unsupported key type %v", p.Type)
 	}
@@ -1442,14 +1393,6 @@ func (p *Policy) VerifySignatureWithOptions(context, input []byte, sig string, o
 		}
 
 		return err == nil, nil
-
-	case KeyType_MANAGED_KEY:
-		keyEntry, err := p.safeGetKeyEntry(ver)
-		if err != nil {
-			return false, err
-		}
-
-		return p.verifyWithManagedKey(options, keyEntry, input, sigBytes)
 
 	default:
 		return false, errutil.InternalError{Err: fmt.Sprintf("unsupported key type %v", p.Type)}
@@ -1658,7 +1601,7 @@ func (p *Policy) RotateInMemory(randReader io.Reader) (retErr error) {
 		entry.EC_Y = privKey.Y
 		derBytes, err := x509.MarshalPKIXPublicKey(privKey.Public())
 		if err != nil {
-			return errwrap.Wrapf("error marshaling public key: {{err}}", err)
+			return fmt.Errorf("error marshaling public key: {{err}}", err)
 		}
 		pemBlock := &pem.Block{
 			Type:  "PUBLIC KEY",
@@ -1762,7 +1705,7 @@ func (p *Policy) Backup(ctx context.Context, storage logical.Storage) (out strin
 	}
 	err := p.Persist(ctx, storage)
 	if err != nil {
-		return "", errwrap.Wrapf("failed to persist policy with backup info: {{err}}", err)
+		return "", fmt.Errorf("failed to persist policy with backup info: {{err}}", err)
 	}
 
 	// Load the archive only after persisting the policy as the archive can get
@@ -1868,17 +1811,6 @@ func (p *Policy) SymmetricEncryptRaw(ver int, encKey, plaintext []byte, opts Sym
 		}
 
 		aead = cha
-	case KeyType_MANAGED_KEY:
-		if opts.Convergent || len(opts.Nonce) != 0 {
-			return nil, errutil.UserError{Err: "cannot use convergent encryption or provide a nonce to managed-key backed encryption"}
-		}
-		if opts.AEADFactory == nil {
-			return nil, errors.New("expected AEAD factory from managed key, none provided")
-		}
-		aead, err = opts.AEADFactory.GetAEAD(nonce)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	if opts.Convergent {
@@ -1948,11 +1880,6 @@ func (p *Policy) SymmetricDecryptRaw(encKey, ciphertext []byte, opts SymmetricOp
 		}
 
 		aead = cha
-	case KeyType_MANAGED_KEY:
-		aead, err = opts.AEADFactory.GetAEAD(nonce)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	if len(ciphertext) < aead.NonceSize() {
@@ -2060,7 +1987,6 @@ func (p *Policy) EncryptWithFactory(ver int, context []byte, nonce []byte, value
 				if err != nil {
 					return "", errutil.InternalError{Err: fmt.Sprintf("unable to get associated_data/additional_data from factory[%d]: %v", index, err)}
 				}
-			case ManagedKeyFactory:
 			default:
 				return "", errutil.InternalError{Err: fmt.Sprintf("unknown type of factory[%d]: %T", index, rawFactory)}
 			}
@@ -2085,35 +2011,6 @@ func (p *Policy) EncryptWithFactory(ver int, context []byte, nonce []byte, value
 		if err != nil {
 			return "", errutil.InternalError{Err: fmt.Sprintf("failed to RSA encrypt the plaintext: %v", err)}
 		}
-	case KeyType_MANAGED_KEY:
-		keyEntry, err := p.safeGetKeyEntry(ver)
-		if err != nil {
-			return "", err
-		}
-
-		var aad []byte
-		var managedKeyFactory ManagedKeyFactory
-		for _, f := range factories {
-			switch factory := f.(type) {
-			case AssociatedDataFactory:
-				aad, err = factory.GetAssociatedData()
-				if err != nil {
-					return "", nil
-				}
-			case ManagedKeyFactory:
-				managedKeyFactory = factory
-			}
-		}
-
-		if managedKeyFactory == nil {
-			return "", errors.New("key type is managed_key, but managed key parameters were not provided")
-		}
-
-		ciphertext, err = p.encryptWithManagedKey(managedKeyFactory.GetManagedKeyParameters(), keyEntry, plaintext, nonce, aad)
-		if err != nil {
-			return "", err
-		}
-
 	default:
 		return "", errutil.InternalError{Err: fmt.Sprintf("unsupported key type %v", p.Type)}
 	}
@@ -2248,7 +2145,7 @@ func (ke *KeyEntry) parseFromKey(PolKeyType KeyType, parsedKey any) error {
 
 			derBytes, err = x509.MarshalPKIXPublicKey(ecdsaKey.Public())
 			if err != nil {
-				return errwrap.Wrapf("error marshaling public key: {{err}}", err)
+				return fmt.Errorf("error marshaling public key: {{err}}", err)
 			}
 		} else {
 			ecdsaKey := parsedKey.(*ecdsa.PublicKey)
@@ -2262,7 +2159,7 @@ func (ke *KeyEntry) parseFromKey(PolKeyType KeyType, parsedKey any) error {
 
 			derBytes, err = x509.MarshalPKIXPublicKey(ecdsaKey)
 			if err != nil {
-				return errwrap.Wrapf("error marshaling public key: {{err}}", err)
+				return fmt.Errorf("error marshaling public key: {{err}}", err)
 			}
 		}
 

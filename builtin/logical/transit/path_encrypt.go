@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -76,14 +75,6 @@ type AssocDataFactory struct {
 
 func (a AssocDataFactory) GetAssociatedData() ([]byte, error) {
 	return base64.StdEncoding.DecodeString(a.Encoded)
-}
-
-type ManagedKeyFactory struct {
-	managedKeyParams keysutil.ManagedKeyParameters
-}
-
-func (m ManagedKeyFactory) GetManagedKeyParameters() keysutil.ManagedKeyParameters {
-	return m.managedKeyParams
 }
 
 func (b *backend) pathEncrypt() *framework.Path {
@@ -439,8 +430,6 @@ func (b *backend) pathEncryptWrite(ctx context.Context, req *logical.Request, d 
 			polReq.KeyType = keysutil.KeyType_ChaCha20_Poly1305
 		case "ecdsa-p256", "ecdsa-p384", "ecdsa-p521":
 			return logical.ErrorResponse(fmt.Sprintf("key type %v not supported for this operation", keyType)), logical.ErrInvalidRequest
-		case "managed_key":
-			polReq.KeyType = keysutil.KeyType_MANAGED_KEY
 		default:
 			return logical.ErrorResponse(fmt.Sprintf("unknown key type %v", keyType)), logical.ErrInvalidRequest
 		}
@@ -493,23 +482,7 @@ func (b *backend) pathEncryptWrite(ctx context.Context, req *logical.Request, d 
 			factory = AssocDataFactory{item.AssociatedData}
 		}
 
-		var managedKeyFactory ManagedKeyFactory
-		if p.Type == keysutil.KeyType_MANAGED_KEY {
-			managedKeySystemView, ok := b.System().(logical.ManagedKeySystemView)
-			if !ok {
-				batchResponseItems[i].Error = errors.New("unsupported system view").Error()
-			}
-
-			managedKeyFactory = ManagedKeyFactory{
-				managedKeyParams: keysutil.ManagedKeyParameters{
-					ManagedKeySystemView: managedKeySystemView,
-					BackendUUID:          b.backendUUID,
-					Context:              ctx,
-				},
-			}
-		}
-
-		ciphertext, err := p.EncryptWithFactory(item.KeyVersion, item.DecodedContext, item.DecodedNonce, item.Plaintext, factory, managedKeyFactory)
+		ciphertext, err := p.EncryptWithFactory(item.KeyVersion, item.DecodedContext, item.DecodedNonce, item.Plaintext, factory)
 		if err != nil {
 			switch err.(type) {
 			case errutil.InternalError:
@@ -579,8 +552,6 @@ func (b *backend) pathEncryptWrite(ctx context.Context, req *logical.Request, d 
 func nonceAllowed(p *keysutil.Policy) bool {
 	var supportedKeyType bool
 	switch p.Type {
-	case keysutil.KeyType_MANAGED_KEY:
-		return true
 	case keysutil.KeyType_AES128_GCM96, keysutil.KeyType_AES256_GCM96, keysutil.KeyType_ChaCha20_Poly1305:
 		supportedKeyType = true
 	default:
