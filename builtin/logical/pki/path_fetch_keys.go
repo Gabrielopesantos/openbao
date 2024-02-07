@@ -10,7 +10,6 @@ import (
 	"net/http"
 
 	"github.com/openbao/openbao/sdk/helper/certutil"
-	"github.com/openbao/openbao/sdk/helper/errutil"
 
 	"github.com/openbao/openbao/sdk/framework"
 	"github.com/openbao/openbao/sdk/logical"
@@ -151,16 +150,6 @@ func buildPathKey(b *backend, pattern string, displayAttrs *framework.DisplayAtt
 								Description: `RFC 5280 Subject Key Identifier of the public counterpart`,
 								Required:    false,
 							},
-							"managed_key_id": {
-								Type:        framework.TypeString,
-								Description: `Managed Key Id`,
-								Required:    false,
-							},
-							"managed_key_name": {
-								Type:        framework.TypeString,
-								Description: `Managed Key Name`,
-								Required:    false,
-							},
 						},
 					}},
 				},
@@ -255,32 +244,9 @@ func (b *backend) pathGetKeyHandler(ctx context.Context, req *logical.Request, d
 	}
 
 	var pkForSkid crypto.PublicKey
-	if key.isManagedPrivateKey() {
-		managedKeyUUID, err := key.getManagedKeyUUID()
-		if err != nil {
-			return nil, errutil.InternalError{Err: fmt.Sprintf("failed extracting managed key uuid from key id %s (%s): %v", key.ID, key.Name, err)}
-		}
-
-		keyInfo, err := getManagedKeyInfo(ctx, b, managedKeyUUID)
-		if err != nil {
-			return nil, errutil.InternalError{Err: fmt.Sprintf("failed fetching managed key info from key id %s (%s): %v", key.ID, key.Name, err)}
-		}
-
-		pkForSkid, err = getManagedKeyPublicKey(sc.Context, sc.Backend, managedKeyUUID)
-		if err != nil {
-			return nil, err
-		}
-
-		// To remain consistent across the api responses (mainly generate root/intermediate calls), return the actual
-		// type of key, not that it is a managed key.
-		respData[keyTypeParam] = string(keyInfo.keyType)
-		respData[managedKeyIdArg] = string(keyInfo.uuid)
-		respData[managedKeyNameArg] = string(keyInfo.name)
-	} else {
-		pkForSkid, err = getPublicKeyFromBytes([]byte(key.PrivateKey))
-		if err != nil {
-			return nil, err
-		}
+	pkForSkid, err = getPublicKeyFromBytes([]byte(key.PrivateKey))
+	if err != nil {
+		return nil, err
 	}
 
 	skid, err := certutil.GetSubjectKeyID(pkForSkid)

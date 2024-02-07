@@ -17,12 +17,12 @@ import (
 
 func pathGenerateKey(b *backend) *framework.Path {
 	return &framework.Path{
-		Pattern: "keys/generate/(internal|exported|kms)",
+		Pattern: "keys/generate/(internal|exported)",
 
 		DisplayAttrs: &framework.DisplayAttributes{
 			OperationPrefix: operationPrefixPKI,
 			OperationVerb:   "generate",
-			OperationSuffix: "internal-key|exported-key|kms-key",
+			OperationSuffix: "internal-key|exported-key",
 		},
 
 		Fields: map[string]*framework.FieldSchema{
@@ -47,18 +47,6 @@ func pathGenerateKey(b *backend) *framework.Path {
 0 (universal default); with rsa key_type: 2048 (default), 3072, or
 4096; with ec key_type: 224, 256 (default), 384, or 521; ignored with
 ed25519.`,
-			},
-			"managed_key_name": {
-				Type: framework.TypeString,
-				Description: `The name of the managed key to use when the exported
-type is kms. When kms type is the key type, this field or managed_key_id
-is required. Ignored for other types.`,
-			},
-			"managed_key_id": {
-				Type: framework.TypeString,
-				Description: `The name of the managed key to use when the exported
-type is kms. When kms type is the key type, this field or managed_key_name
-is required. Ignored for other types.`,
 			},
 		},
 
@@ -106,7 +94,7 @@ is required. Ignored for other types.`,
 
 const (
 	pathGenerateKeyHelpSyn  = `Generate a new private key used for signing.`
-	pathGenerateKeyHelpDesc = `This endpoint will generate a new key pair of the specified type (internal, exported, or kms).`
+	pathGenerateKeyHelpDesc = `This endpoint will generate a new key pair of the specified type (internal, exported).`
 )
 
 func (b *backend) pathGenerateKeyHandler(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
@@ -148,16 +136,6 @@ func (b *backend) pathGenerateKeyHandler(ctx context.Context, req *logical.Reque
 		}
 
 		actualPrivateKeyType = keyBundle.PrivateKeyType
-	case strings.HasSuffix(req.Path, "/kms"):
-		keyId, err := getManagedKeyId(data)
-		if err != nil {
-			return nil, err
-		}
-
-		keyBundle, actualPrivateKeyType, err = createKmsKeyBundle(ctx, b, keyId)
-		if err != nil {
-			return nil, err
-		}
 	default:
 		return logical.ErrorResponse("Unknown type of key to generate"), nil
 	}

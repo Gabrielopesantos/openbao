@@ -83,17 +83,6 @@ type keyEntry struct {
 	PrivateKey     string                  `json:"private_key"`
 }
 
-func (e keyEntry) getManagedKeyUUID() (UUIDKey, error) {
-	if !e.isManagedPrivateKey() {
-		return "", errutil.InternalError{Err: "getManagedKeyId called on a key id %s (%s) "}
-	}
-	return extractManagedKeyId([]byte(e.PrivateKey))
-}
-
-func (e keyEntry) isManagedPrivateKey() bool {
-	return e.PrivateKeyType == certutil.ManagedPrivateKey
-}
-
 type issuerUsage uint
 
 const (
@@ -382,20 +371,10 @@ func (sc *storageContext) importKey(keyValue string, keyName string, keyType cer
 
 	// Get our public key from the current inbound key, to compare against all the other keys.
 	var pkForImportingKey crypto.PublicKey
-	if keyType == certutil.ManagedPrivateKey {
-		managedKeyUUID, err := extractManagedKeyId([]byte(keyValue))
-		if err != nil {
-			return nil, false, errutil.InternalError{Err: fmt.Sprintf("failed extracting managed key uuid from key: %v", err)}
-		}
-		pkForImportingKey, err = getManagedKeyPublicKey(sc.Context, sc.Backend, managedKeyUUID)
-		if err != nil {
-			return nil, false, err
-		}
-	} else {
-		pkForImportingKey, err = getPublicKeyFromBytes([]byte(keyValue))
-		if err != nil {
-			return nil, false, err
-		}
+
+	pkForImportingKey, err = getPublicKeyFromBytes([]byte(keyValue))
+	if err != nil {
+		return nil, false, err
 	}
 
 	foundExistingKeyWithName := false

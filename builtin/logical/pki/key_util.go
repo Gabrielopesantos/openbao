@@ -24,13 +24,6 @@ func comparePublicKey(sc *storageContext, key *keyEntry, publicKey crypto.Public
 }
 
 func getPublicKey(ctx context.Context, b *backend, key *keyEntry) (crypto.PublicKey, error) {
-	if key.PrivateKeyType == certutil.ManagedPrivateKey {
-		keyId, err := extractManagedKeyId([]byte(key.PrivateKey))
-		if err != nil {
-			return nil, err
-		}
-		return getManagedKeyPublicKey(ctx, b, keyId)
-	}
 
 	signer, _, _, err := getSignerFromKeyEntryBytes(key)
 	if err != nil {
@@ -42,10 +35,6 @@ func getPublicKey(ctx context.Context, b *backend, key *keyEntry) (crypto.Public
 func getSignerFromKeyEntryBytes(key *keyEntry) (crypto.Signer, certutil.BlockType, *pem.Block, error) {
 	if key.PrivateKeyType == certutil.UnknownPrivateKey {
 		return nil, certutil.UnknownBlock, nil, errutil.InternalError{Err: fmt.Sprintf("unsupported unknown private key type for key: %s (%s)", key.ID, key.Name)}
-	}
-
-	if key.PrivateKeyType == certutil.ManagedPrivateKey {
-		return nil, certutil.UnknownBlock, nil, errutil.InternalError{Err: fmt.Sprintf("can not get a signer from a managed key: %s (%s)", key.ID, key.Name)}
 	}
 
 	bytes, blockType, blk, err := getSignerFromBytes([]byte(key.PrivateKey))
