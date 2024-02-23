@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/openbao/openbao/api"
-	"github.com/openbao/openbao/helper/constants"
 	vaulthttp "github.com/openbao/openbao/http"
 	"github.com/openbao/openbao/vault"
 	"github.com/stretchr/testify/require"
