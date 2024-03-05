@@ -200,7 +200,6 @@ func Test_Something_With_Docker(t *testing.T) {
   opts := &docker.DockerClusterOptions{
     ImageRepo: "hashicorp/vault-enterprise",
     ImageTag:  "latest",
-	VaultLicense: licenseString, // not a path, the actual license bytes
   }
   cluster := docker.NewTestDockerCluster(t, opts)
   defer cluster.Cleanup()
