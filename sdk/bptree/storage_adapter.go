@@ -18,9 +18,9 @@ const (
 
 // StorageAdapter adapts the logical.Storage interface to the NodeStorage interface
 type StorageAdapter[K comparable, V any] struct {
-	storage    logical.Storage
-	prefix     string
 	ctx        context.Context
+	prefix     string
+	storage    logical.Storage
 	serializer NodeSerializer[K, V]
 }
 
@@ -50,8 +50,8 @@ func (s *JSONSerializer[K, V]) Deserialize(data []byte) (*Node[K, V], error) {
 // NewStorageAdapter creates a new adapter for the logical.Storage interface
 func NewStorageAdapter[K comparable, V any](
 	ctx context.Context,
-	storage logical.Storage,
 	prefix string,
+	storage logical.Storage,
 	serializer NodeSerializer[K, V],
 ) *StorageAdapter[K, V] {
 	if !strings.HasSuffix(prefix, "/") {
@@ -63,9 +63,9 @@ func NewStorageAdapter[K comparable, V any](
 	}
 
 	return &StorageAdapter[K, V]{
-		storage:    storage,
-		prefix:     prefix,
 		ctx:        ctx,
+		prefix:     prefix,
+		storage:    storage,
 		serializer: serializer,
 	}
 }

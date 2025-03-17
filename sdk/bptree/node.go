@@ -2,14 +2,16 @@ package bptree
 
 // Node represents a node in the B+ tree
 type Node[K comparable, V any] struct {
-	Id       string        `json:"id"`
-	Keys     []K           `json:"keys"`
-	Values   []V           `json:"values"`
-	Children []*Node[K, V] `json:"children"`
-	Parent   *Node[K, V]   `json:"parent"`
-	IsLeaf   bool          `json:"isLeaf"`
-	Next     *Node[K, V]   `json:"next"` // Next leaf node (for range queries)
-	// ChildrenKeys []K
+	Id           string   `json:"id"`
+	IsLeaf       bool     `json:"isLeaf"`
+	Keys         []K      `json:"keys"`
+	Values       []V      `json:"values"`
+	ChildrenKeys []string `json:"childrenKeys"`
+	children     []*Node[K, V]
+	ParentKey    string `json:"parentKey"`
+	parent       *Node[K, V]
+	mext         *Node[K, V] // Next leaf node (for range queries)
+	NextKey      K
 }
 
 // NewLeafNode creates a new leaf node
@@ -43,6 +45,7 @@ func (n *Node[K, V]) findKeyIndex(key K, less func(a, b K) bool) (int, bool) {
 			return mid, true // Key found
 		}
 	}
+
 	return low, false // Key not found, return insertion point
 }
 
@@ -67,12 +70,19 @@ func (n *Node[K, V]) insertKeyValue(idx int, key K, value V) {
 
 // insertChild inserts a child node at the specified index
 func (n *Node[K, V]) insertChild(idx int, child *Node[K, V]) {
-	n.Children = append(n.Children, nil)
-	if idx < len(n.Children)-1 {
-		copy(n.Children[idx+1:], n.Children[idx:len(n.Children)-1])
-		n.Children[idx] = child
-	}
-	child.Parent = n
+	n.children = append(n.children, nil)
+	n.ChildrenKeys = append(n.ChildrenKeys, child.Id)
+	// if idx < len(n.Children)-1 {
+	// Shift children to make room for the new child
+	copy(n.children[idx+1:], n.children[idx:len(n.children)-1])
+	n.children[idx] = child
+
+	// Shift children keys to make room for the new child key
+	copy(n.ChildrenKeys[idx+1:], n.ChildrenKeys[idx:len(n.ChildrenKeys)-1])
+	n.ChildrenKeys[idx] = child.Id
+	// }
+	child.parent = n
+	child.ParentKey = n.Id
 }
 
 // removeKeyValue removes a key-value pair at the specified index
@@ -83,5 +93,6 @@ func (n *Node[K, V]) removeKeyValue(idx int) {
 
 // removeChild removes a child at the specified index
 func (n *Node[K, V]) removeChild(idx int) {
-	n.Children = append(n.Children[:idx], n.Children[idx+1:]...)
+	n.children = append(n.children[:idx], n.children[idx+1:]...)
+	n.ChildrenKeys = append(n.ChildrenKeys[:idx], n.ChildrenKeys[idx+1:]...)
 }
