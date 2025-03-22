@@ -17,7 +17,6 @@ var ErrKeyNotFound = errors.New("key not found")
 
 // BPlusTree represents a B+ tree data structure
 type BPlusTree[K comparable, V any] struct {
-	root    *Node[K, V]
 	order   int
 	storage NodeStorage[K, V]
 	less    func(a, b K) bool
@@ -49,7 +48,6 @@ func NewBPlusTree[K comparable, V any](order int, less func(a, b K) bool, storag
 	if rootID == "" {
 		// Create a new root node
 		rootNode := NewLeafNode[K, V](genUuid())
-		tree.root = rootNode
 
 		// Save the root node
 		if err := storage.SaveNode(rootNode); err != nil {
@@ -60,19 +58,25 @@ func NewBPlusTree[K comparable, V any](order int, less func(a, b K) bool, storag
 		if err := storage.SetRootID(rootNode.ID); err != nil {
 			return nil, fmt.Errorf("failed to set root ID: %w", err)
 		}
-	} else {
-		// Load the existing root node
-		rootNode, err := storage.LoadNode(rootID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load root node: %w", err)
-		}
-		if rootNode == nil {
-			return nil, errors.New("root node not found")
-		}
-		tree.root = rootNode
 	}
 
 	return tree, nil
+}
+
+// getRoot loads the root node from storage
+func (t *BPlusTree[K, V]) getRoot() (*Node[K, V], error) {
+	rootID, err := t.storage.GetRootID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get root ID: %w", err)
+	}
+	if rootID == "" {
+		return nil, errors.New("root node not found")
+	}
+	root, err := t.storage.LoadNode(rootID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load root node: %w", err)
+	}
+	return root, nil
 }
 
 // minKeys returns the minimum number of keys a node must have
@@ -103,7 +107,12 @@ func (t *BPlusTree[K, V]) Get(key K) (V, bool, error) {
 }
 
 func (t *BPlusTree[K, V]) get(key K) (V, bool, error) {
-	node := t.root
+	node, err := t.getRoot()
+	if err != nil {
+		var zero V
+		return zero, false, err
+	}
+
 	var zero V
 	for !node.IsLeaf {
 		found := false
@@ -209,26 +218,37 @@ func (t *BPlusTree[K, V]) Delete(key K) error {
 	return nil
 }
 
-// findLeaf finds the leaf node where a key belongs
-// TODO (gabrielopesantos): Maybe accept a node (instead of always starting from the root)
+// findLeafNode finds the leaf node where a key belongs
 func (t *BPlusTree[K, V]) findLeafNode(key K) (*Node[K, V], error) {
-	curr := t.root
-	for !curr.IsLeaf {
-		for i, k := range curr.Keys {
-			if t.less(k, key) {
-				continue
-			}
+	node, err := t.getRoot()
+	if err != nil {
+		return nil, err
+	}
 
+	for !node.IsLeaf {
+		found := false
+		for i, k := range node.Keys {
+			// If search key is less than current key, go left
+			if t.less(key, k) {
+				var err error
+				node, err = t.storage.LoadNode(node.ChildrenIDs[i])
+				if err != nil {
+					return nil, err
+				}
+				found = true
+				break
+			}
+		}
+		// If we didn't find a key greater than search key, go right
+		if !found {
 			var err error
-			curr, err = t.storage.LoadNode(curr.ChildrenIDs[i])
+			node, err = t.storage.LoadNode(node.ChildrenIDs[len(node.ChildrenIDs)-1])
 			if err != nil {
 				return nil, err
 			}
-			break
 		}
 	}
-
-	return curr, nil
+	return node, nil
 }
 
 func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
@@ -275,7 +295,11 @@ func (t *BPlusTree[K, V]) insertIntoLeaf(leaf *Node[K, V], key K, value V) error
 // insertIntoParent inserts a key and right node into the parent of left node
 func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], rightNode *Node[K, V], splitKey K) error {
 	// If leftNode is the root, create a new root
-	if leftNode.ID == t.root.ID {
+	rootID, err := t.storage.GetRootID()
+	if err != nil {
+		return fmt.Errorf("failed to get root ID: %w", err)
+	}
+	if leftNode.ID == rootID {
 		newRoot := NewInternalNode[K, V](genUuid())
 		newRoot.Keys = []K{splitKey}
 		newRoot.ChildrenIDs = []string{leftNode.ID, rightNode.ID}
@@ -283,9 +307,6 @@ func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], rightNode *Node
 		// Update parent references
 		leftNode.ParentID = newRoot.ID
 		rightNode.ParentID = newRoot.ID
-
-		// Update root
-		t.root = newRoot
 
 		// Save all nodes with updated parent references
 		if err := t.storage.SaveNode(leftNode); err != nil {
@@ -325,6 +346,9 @@ func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], rightNode *Node
 	rightNode.ParentID = parent.ID
 
 	// Save the updated nodes
+	if err := t.storage.SaveNode(leftNode); err != nil {
+		return fmt.Errorf("failed to save left node: %w", err)
+	}
 	if err := t.storage.SaveNode(rightNode); err != nil {
 		return fmt.Errorf("failed to save right node: %w", err)
 	}
@@ -364,8 +388,8 @@ func (t *BPlusTree[K, V]) splitInternalNode(node *Node[K, V]) (*Node[K, V], K) {
 	newInternal.ChildrenIDs = node.ChildrenIDs[splitIndex+1:]
 
 	// Update original node with first half
-	node.Keys = node.Keys[:splitIndex]
-	node.ChildrenIDs = node.ChildrenIDs[:splitIndex]
+	node.Keys = node.Keys[:splitIndex+1]
+	node.ChildrenIDs = node.ChildrenIDs[:splitIndex+1] // Keep one extra child for the split key
 
 	// Update parent references of newInternal's children
 	for _, childID := range newInternal.ChildrenIDs {
@@ -393,21 +417,18 @@ func genUuid() string {
 	return aUuid
 }
 
-// PrintTree prints a visual representation of the B+ tree
-func (t *BPlusTree[K, V]) PrintTree() error {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	if t.root == nil {
-		fmt.Println("Empty tree")
-		return nil
+// Print prints a visual representation of the B+ tree
+func (t *BPlusTree[K, V]) Print() error {
+	root, err := t.getRoot()
+	if err != nil {
+		return err
 	}
 
-	return t.printNode(t.root, "", true)
+	return t.printNode(root, "", true, true)
 }
 
 // printNode recursively prints a node and its children
-func (t *BPlusTree[K, V]) printNode(node *Node[K, V], prefix string, isLast bool) error {
+func (t *BPlusTree[K, V]) printNode(node *Node[K, V], prefix string, isLast bool, isRoot bool) error {
 	// Print the current node
 	if node.IsLeaf {
 		log.Printf("%s%s Leaf Node (ID: %s)\n", prefix, getPrefix(isLast), node.ID)
@@ -438,7 +459,7 @@ func (t *BPlusTree[K, V]) printNode(node *Node[K, V], prefix string, isLast bool
 			}
 
 			// Recursively print the child
-			if err := t.printNode(child, nextPrefix, isLastChild); err != nil {
+			if err := t.printNode(child, nextPrefix, isLastChild, false); err != nil {
 				return err
 			}
 		}
