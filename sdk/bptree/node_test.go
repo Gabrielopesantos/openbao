@@ -8,40 +8,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stringLess is a comparison function for strings
-func stringLess(a, b string) bool {
-	return a < b
-}
-
-// intLess is a comparison function for integers
-func intLess(a, b int) bool {
-	return a < b
-}
-
 func TestNewLeafNode(t *testing.T) {
 	node := NewLeafNode[int, string]("leaf1")
 	require.NotNil(t, node)
-	require.Equal(t, "leaf1", node.Id)
+	require.Equal(t, "leaf1", node.ID)
 	require.True(t, node.IsLeaf)
 	require.Empty(t, node.Keys)
 	require.Empty(t, node.Values)
 	require.Empty(t, node.children)
-	require.Empty(t, node.ChildrenKeys)
+	require.Empty(t, node.ChildrenIDs)
 	require.Nil(t, node.parent)
-	require.Nil(t, node.mext)
+	require.Nil(t, node.next)
 }
 
 func TestNewInternalNode(t *testing.T) {
 	node := NewInternalNode[int, string]("internal1")
 	require.NotNil(t, node)
-	require.Equal(t, "internal1", node.Id)
+	require.Equal(t, "internal1", node.ID)
 	require.False(t, node.IsLeaf)
 	require.Empty(t, node.Keys)
 	require.Empty(t, node.Values)
 	require.Empty(t, node.children)
-	require.Empty(t, node.ChildrenKeys)
+	require.Empty(t, node.ChildrenIDs)
 	require.Nil(t, node.parent)
-	require.Nil(t, node.mext)
+	require.Nil(t, node.next)
 }
 
 func TestFindKeyIndex(t *testing.T) {
@@ -165,13 +155,13 @@ func TestInsertChild(t *testing.T) {
 		parent.insertChild(0, child1)
 
 		require.Equal(t, 1, len(parent.children))
-		require.Equal(t, 1, len(parent.ChildrenKeys))
+		require.Equal(t, 1, len(parent.ChildrenIDs))
 
-		require.Equal(t, child1.Id, parent.ChildrenKeys[0])
+		require.Equal(t, child1.ID, parent.ChildrenIDs[0])
 		require.Equal(t, child1, parent.children[0])
 
 		require.NotNil(t, child1.parent)
-		require.Equal(t, parent.Id, child1.ParentKey)
+		require.Equal(t, parent.ID, child1.ParentID)
 		require.Equal(t, parent, child1.parent)
 	})
 
@@ -186,8 +176,8 @@ func TestInsertChild(t *testing.T) {
 		parent.insertChild(1, child2) // Insert in the middle
 
 		require.Equal(t, 3, len(parent.children))
-		require.Equal(t, 3, len(parent.ChildrenKeys))
-		require.Equal(t, []string{"child1", "child2", "child3"}, parent.ChildrenKeys)
+		require.Equal(t, 3, len(parent.ChildrenIDs))
+		require.Equal(t, []string{"child1", "child2", "child3"}, parent.ChildrenIDs)
 		require.Equal(t, []*Node[int, string]{child1, child2, child3}, parent.children)
 
 		// Check parent references
@@ -251,13 +241,13 @@ func TestRemoveChild(t *testing.T) {
 		child3 := NewLeafNode[int, string]("child3")
 
 		parent.children = []*Node[int, string]{child1, child2, child3}
-		parent.ChildrenKeys = []string{"child1", "child2", "child3"}
+		parent.ChildrenIDs = []string{"child1", "child2", "child3"}
 
 		parent.removeChild(1) // Remove child2
 
 		require.Equal(t, 2, len(parent.children))
-		require.Equal(t, 2, len(parent.ChildrenKeys))
-		require.Equal(t, []string{"child1", "child3"}, parent.ChildrenKeys)
+		require.Equal(t, 2, len(parent.ChildrenIDs))
+		require.Equal(t, []string{"child1", "child3"}, parent.ChildrenIDs)
 		require.Equal(t, []*Node[int, string]{child1, child3}, parent.children)
 	})
 
@@ -268,13 +258,13 @@ func TestRemoveChild(t *testing.T) {
 		child3 := NewLeafNode[int, string]("child3")
 
 		parent.children = []*Node[int, string]{child1, child2, child3}
-		parent.ChildrenKeys = []string{"child1", "child2", "child3"}
+		parent.ChildrenIDs = []string{"child1", "child2", "child3"}
 
 		parent.removeChild(0) // Remove child1
 
 		require.Equal(t, 2, len(parent.children))
-		require.Equal(t, 2, len(parent.ChildrenKeys))
-		require.Equal(t, []string{"child2", "child3"}, parent.ChildrenKeys)
+		require.Equal(t, 2, len(parent.ChildrenIDs))
+		require.Equal(t, []string{"child2", "child3"}, parent.ChildrenIDs)
 		require.Equal(t, []*Node[int, string]{child2, child3}, parent.children)
 	})
 
@@ -285,13 +275,13 @@ func TestRemoveChild(t *testing.T) {
 		child3 := NewLeafNode[int, string]("child3")
 
 		parent.children = []*Node[int, string]{child1, child2, child3}
-		parent.ChildrenKeys = []string{"child1", "child2", "child3"}
+		parent.ChildrenIDs = []string{"child1", "child2", "child3"}
 
 		parent.removeChild(2) // Remove child3
 
 		require.Equal(t, 2, len(parent.children))
-		require.Equal(t, 2, len(parent.ChildrenKeys))
-		require.Equal(t, []string{"child1", "child2"}, parent.ChildrenKeys)
+		require.Equal(t, 2, len(parent.ChildrenIDs))
+		require.Equal(t, []string{"child1", "child2"}, parent.ChildrenIDs)
 		require.Equal(t, []*Node[int, string]{child1, child2}, parent.children)
 	})
 
@@ -300,12 +290,12 @@ func TestRemoveChild(t *testing.T) {
 		child := NewLeafNode[int, string]("child")
 
 		parent.children = []*Node[int, string]{child}
-		parent.ChildrenKeys = []string{"child"}
+		parent.ChildrenIDs = []string{"child"}
 
 		parent.removeChild(0)
 
 		require.Empty(t, parent.children)
-		require.Empty(t, parent.ChildrenKeys)
+		require.Empty(t, parent.ChildrenIDs)
 	})
 }
 
@@ -334,7 +324,7 @@ func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	require.NoError(t, err, "Failed to load node")
 	require.NotNil(t, loadedLeaf, "Loaded node is nil")
 
-	require.Equal(t, leaf.Id, loadedLeaf.Id, "Expected node ID %s, got %s", leaf.Id, loadedLeaf.Id)
+	require.Equal(t, leaf.ID, loadedLeaf.ID, "Expected node ID %s, got %s", leaf.ID, loadedLeaf.ID)
 	require.Equal(t, leaf.Keys, loadedLeaf.Keys, "Expected node keys %v, got %v", leaf.Keys, loadedLeaf.Keys)
 	require.Equal(t, leaf.Values, loadedLeaf.Values, "Expected node values %v, got %v", leaf.Values, loadedLeaf.Values)
 	require.Nil(t, loadedLeaf.parent, "Parent should not be loaded")
@@ -348,8 +338,8 @@ func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	require.NoError(t, err, "Failed to load internal node")
 	require.NotNil(t, loadedInternal, "Loaded internal node is nil")
 
-	require.Equal(t, internal.Id, loadedInternal.Id, "Expected node ID %s, got %s", internal.Id, loadedInternal.Id)
-	require.Equal(t, internal.ChildrenKeys, loadedInternal.ChildrenKeys, "Expected node children keys %v, got %v", internal.ChildrenKeys, loadedInternal.ChildrenKeys)
+	require.Equal(t, internal.ID, loadedInternal.ID, "Expected node ID %s, got %s", internal.ID, loadedInternal.ID)
+	require.Equal(t, internal.ChildrenIDs, loadedInternal.ChildrenIDs, "Expected node children keys %v, got %v", internal.ChildrenIDs, loadedInternal.ChildrenIDs)
 	require.Empty(t, loadedInternal.children, "Children should not be loaded")
 	require.Nil(t, loadedInternal.parent, "Parent should not be loaded")
 }

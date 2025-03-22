@@ -40,7 +40,7 @@ func TestStorageAdapter(t *testing.T) {
 	require.NoError(t, err, "Failed to load node")
 	require.NotNil(t, loadedNode, "Loaded node is nil")
 
-	require.Equal(t, node.Id, loadedNode.Id, "Expected node ID %s, got %s", node.Id, loadedNode.Id)
+	require.Equal(t, node.ID, loadedNode.ID, "Expected node ID %s, got %s", node.ID, loadedNode.ID)
 	require.Equal(t, node.Keys, loadedNode.Keys, "Expected node keys %v, got %v", node.Keys, loadedNode.Keys)
 	require.Equal(t, node.Values, loadedNode.Values, "Expected node values %v, got %v", node.Values, loadedNode.Values)
 

@@ -2,9 +2,11 @@ package bptree
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
+	"github.com/stretchr/testify/require"
 )
 
 // stringLess is a comparison function for strings
@@ -17,324 +19,259 @@ func intLess(a, b int) bool {
 	return a < b
 }
 
-// TestNewBPlusTree tests the creation of a new B+ tree
 func TestNewBPlusTree(t *testing.T) {
+	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	storage := NewStorageAdapter[string, string](context.Background(), s, "bptree", nil)
 
-	tree, err := NewBPlusTree(4, stringLess, storage)
-	if err != nil {
-		t.Fatalf("Failed to create B+ tree: %v", err)
+	t.Run("DefaultOrder", func(t *testing.T) {
+		adapter := NewStorageAdapter[string, string](ctx, "bptree_default", s, nil)
+		tree, err := NewBPlusTree(0, stringLess, adapter)
+		require.NoError(t, err, "Failed to create B+ tree with default order")
+		require.Equal(t, DefaultOrder, tree.order)
+	})
+
+	t.Run("CustomOrder", func(t *testing.T) {
+		adapter := NewStorageAdapter[string, string](ctx, "bptree_custom", s, nil)
+		tree, err := NewBPlusTree(4, stringLess, adapter)
+		require.NoError(t, err, "Failed to create B+ tree with custom order")
+		require.Equal(t, 4, tree.order)
+	})
+
+	t.Run("NilComparisonFunction", func(t *testing.T) {
+		adapter := NewStorageAdapter[string, string](ctx, "bptree_nil_comp", s, nil)
+		tree, err := NewBPlusTree(4, nil, adapter)
+		require.Error(t, err, "Should fail with nil comparison function")
+		require.Nil(t, tree)
+	})
+}
+
+func TestBPlusTreeBasicOperations(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	adapter := NewStorageAdapter[string, string](ctx, "bptree_basic", s, nil)
+
+	tree, err := NewBPlusTree(4, stringLess, adapter)
+	require.NoError(t, err, "Failed to create B+ tree")
+
+	// Test empty tree Get
+	val, found, err := tree.Get("key1")
+	require.Error(t, err, "Should have error when trying to get from empty tree")
+	require.False(t, found, "Should not find key in empty tree")
+	require.Equal(t, "", val, "Value should be empty")
+
+	// Insert a key
+	err = tree.Insert("key1", "value1")
+	require.NoError(t, err, "Failed to insert key")
+
+	// Get the key
+	val, found, err = tree.Get("key1")
+	require.NoError(t, err, "Error when getting key")
+	require.True(t, found, "Should find inserted key")
+	require.Equal(t, "value1", val, "Retrieved value should match inserted value")
+
+	// Insert duplicate key
+	err = tree.Insert("key1", "value1_new")
+	require.Error(t, err, "Should not allow duplicate keys")
+
+	// Delete key
+	err = tree.Delete("key1")
+	require.NoError(t, err, "Failed to delete key")
+
+	// Verify key was deleted
+	val, found, err = tree.Get("key1")
+	require.Error(t, err, "Should error when getting a deleted key")
+	require.False(t, found, "Should not find deleted key")
+	require.Equal(t, "", val, "Value should be empty after deletion")
+
+	// Delete non-existent key
+	err = tree.Delete("key1")
+	require.Error(t, err, "Deleting non-existent key should return error")
+	require.Equal(t, ErrKeyNotFound, err, "Should return ErrKeyNotFound")
+}
+
+func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	adapter := NewStorageAdapter[int, string](ctx, "bptree_split", s, nil)
+
+	// Create a tree with small order to test splitting
+	tree, err := NewBPlusTree(2, intLess, adapter)
+	require.NoError(t, err, "Failed to create B+ tree")
+
+	// Insert keys that will cause leaf splitting
+	err = tree.Insert(10, "value10")
+	require.NoError(t, err, "Failed to insert key 10")
+
+	err = tree.Insert(20, "value20")
+	require.NoError(t, err, "Failed to insert key 20")
+
+	// This should cause a leaf split
+	err = tree.Insert(30, "value30")
+	require.NoError(t, err, "Failed to insert key 30")
+
+	// Verify all values are accessible
+	testCases := []struct {
+		key   int
+		value string
+	}{
+		{10, "value10"},
+		{20, "value20"},
+		{30, "value30"},
 	}
 
-	if tree.root == nil {
-		t.Fatal("Root node is nil")
+	for _, tc := range testCases {
+		val, found, err := tree.Get(tc.key)
+		require.NoError(t, err, fmt.Sprintf("Error when getting key %d", tc.key))
+		require.True(t, found, fmt.Sprintf("Should find inserted key %d", tc.key))
+		require.Equal(t, tc.value, val, fmt.Sprintf("Retrieved value should match inserted value for key %d", tc.key))
 	}
 
-	if !tree.root.IsLeaf {
-		t.Fatal("Root node should be a leaf in a new tree")
-	}
+	// Continue inserting to create internal node splits
+	err = tree.Insert(40, "value40")
+	require.NoError(t, err, "Failed to insert key 40")
 
-	if len(tree.root.Keys) != 0 {
-		t.Fatal("Root node should be empty in a new tree")
+	err = tree.Insert(50, "value50")
+	require.NoError(t, err, "Failed to insert key 50")
+
+	err = tree.Insert(60, "value60")
+	require.NoError(t, err, "Failed to insert key 60")
+
+	err = tree.Insert(70, "value70")
+	require.NoError(t, err, "Failed to insert key 70")
+
+	err = tree.Insert(80, "value80")
+	require.NoError(t, err, "Failed to insert key 80")
+
+	// Verify all values after more complex splitting
+	for _, tc := range []struct {
+		key   int
+		value string
+	}{
+		{10, "value10"},
+		{20, "value20"},
+		{30, "value30"},
+		{40, "value40"},
+		{50, "value50"},
+		{60, "value60"},
+		{70, "value70"},
+		{80, "value80"},
+	} {
+		val, found, err := tree.Get(tc.key)
+		require.NoError(t, err, fmt.Sprintf("Error when getting key %d", tc.key))
+		require.True(t, found, fmt.Sprintf("Should find inserted key %d", tc.key))
+		require.Equal(t, tc.value, val, fmt.Sprintf("Retrieved value should match inserted value for key %d", tc.key))
 	}
 }
 
-// TestBPlusTreeBasic tests basic operations of the B+ tree
-func TestBPlusTreeBasic(t *testing.T) {
+func TestBPlusTreeDelete(t *testing.T) {
+	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	storage := NewStorageAdapter[string, string](context.Background(), s, "bptree", nil)
-	tree, _ := NewBPlusTree(4, stringLess, storage)
+	adapter := NewStorageAdapter[string, int](ctx, "bptree_delete", s, nil)
 
-	// Insert some key-value pairs
-	testData := map[string]string{
-		"apple":  "red",
-		"banana": "yellow",
-		"cherry": "red",
+	tree, err := NewBPlusTree(4, stringLess, adapter)
+	require.NoError(t, err, "Failed to create B+ tree")
+
+	// Insert keys
+	keys := []string{"a", "b", "c", "d", "e"}
+	for i, key := range keys {
+		err = tree.Insert(key, i+1)
+		require.NoError(t, err, "Failed to insert key")
 	}
 
-	for k, v := range testData {
-		if err := tree.Put(k, v); err != nil {
-			t.Fatalf("Failed to put %s: %v", k, err)
+	// Test deleting from the middle
+	err = tree.Delete("c")
+	require.NoError(t, err, "Failed to delete key")
+
+	// Verify deletion
+	_, found, err := tree.Get("c")
+	require.NoError(t, err, "Error when getting deleted key")
+	require.False(t, found, "Should not find deleted key")
+
+	// Verify remaining keys
+	for _, key := range []string{"a", "b", "d", "e"} {
+		val, found, err := tree.Get(key)
+		require.NoError(t, err, "Error when getting key")
+		require.True(t, found, "Should find remaining key")
+
+		// Original index in the keys slice
+		expectedVal := 0
+		if key == "a" {
+			expectedVal = 1
+		} else if key == "b" {
+			expectedVal = 2
+		} else if key == "d" {
+			expectedVal = 4
+		} else if key == "e" {
+			expectedVal = 5
 		}
+
+		require.Equal(t, expectedVal, val, "Retrieved value should match expected")
 	}
 
-	// Verify the inserted data
-	for k, v := range testData {
-		value, found, err := tree.Get(k)
-		if err != nil {
-			t.Fatalf("Error getting %s: %v", k, err)
-		}
-		if !found {
-			t.Fatalf("Key %s not found", k)
-		}
-		if value != v {
-			t.Fatalf("Expected value %s for key %s, got %s", v, k, value)
-		}
+	// Delete first key
+	err = tree.Delete("a")
+	require.NoError(t, err, "Failed to delete first key")
+
+	// Delete last key
+	err = tree.Delete("e")
+	require.NoError(t, err, "Failed to delete last key")
+
+	// Verify only "b" and "d" remain
+	for _, key := range []string{"b", "d"} {
+		_, found, err := tree.Get(key)
+		require.NoError(t, err, "Error when getting key")
+		require.True(t, found, "Should find remaining key")
 	}
 
-	// Test updating an existing key
-	if err := tree.Put("apple", "green"); err != nil {
-		t.Fatalf("Failed to update apple: %v", err)
-	}
-
-	value, found, err := tree.Get("apple")
-	if err != nil {
-		t.Fatalf("Error getting apple: %v", err)
-	}
-	if !found {
-		t.Fatalf("Key apple not found after update")
-	}
-	if value != "green" {
-		t.Fatalf("Expected value green for key apple, got %s", value)
-	}
-
-	// Test deleting a key
-	if err := tree.Delete("banana"); err != nil {
-		t.Fatalf("Failed to delete banana: %v", err)
-	}
-
-	_, found, err = tree.Get("banana")
-	if err != nil {
-		t.Fatalf("Error getting banana: %v", err)
-	}
-	if found {
-		t.Fatalf("Key banana should have been deleted")
-	}
-
-	// Test range query
-	results := make(map[string]string)
-	err = tree.Range("apple", "cherry", func(k, v string) bool {
-		results[k] = v
-		return true
-	})
-
-	if err != nil {
-		t.Fatalf("Range query failed: %v", err)
-	}
-
-	if len(results) != 2 {
-		t.Fatalf("Expected 2 results, got %d", len(results))
-	}
-
-	if results["apple"] != "green" {
-		t.Fatalf("Expected value green for key apple, got %s", results["apple"])
-	}
-
-	if results["cherry"] != "red" {
-		t.Fatalf("Expected value red for key cherry, got %s", results["cherry"])
+	// Verify "a" and "e" are gone
+	for _, key := range []string{"a", "e"} {
+		_, found, err := tree.Get(key)
+		require.NoError(t, err, "Error when getting deleted key")
+		require.False(t, found, "Should not find deleted key")
 	}
 }
 
-// TestBPlusTreeRange tests range queries in the B+ tree
-func TestBPlusTreeRange(t *testing.T) {
+func TestBPlusTreeLargeDataSet(t *testing.T) {
+	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	storage := NewStorageAdapter[string, string](context.Background(), s, "bptree", nil)
-	tree, _ := NewBPlusTree(4, stringLess, storage)
+	adapter := NewStorageAdapter[int, string](ctx, "bptree_large", s, nil)
 
-	// Insert some key-value pairs in non-sequential order
-	testData := map[string]string{
-		"apple":  "red",
-		"fig":    "purple",
-		"banana": "yellow",
-		"grape":  "purple",
-		"cherry": "red",
-		"date":   "brown",
-		"kiwi":   "green",
-		"lemon":  "yellow",
-		"mango":  "orange",
+	tree, err := NewBPlusTree(8, intLess, adapter)
+	require.NoError(t, err, "Failed to create B+ tree")
+
+	// Insert 100 keys
+	for i := 1; i <= 100; i++ {
+		err = tree.Insert(i, fmt.Sprintf("value%d", i))
+		require.NoError(t, err, "Failed to insert key %d", i)
 	}
 
-	for k, v := range testData {
-		if err := tree.Put(k, v); err != nil {
-			t.Fatalf("Failed to put %s: %v", k, err)
+	// Verify all keys exist
+	for i := 1; i <= 100; i++ {
+		val, found, err := tree.Get(i)
+		require.NoError(t, err, "Error when getting key %d", i)
+		require.True(t, found, "Should find key %d", i)
+		require.Equal(t, fmt.Sprintf("value%d", i), val, "Retrieved value should match for key %d", i)
+	}
+
+	// Delete every other key
+	for i := 2; i <= 100; i += 2 {
+		err = tree.Delete(i)
+		require.NoError(t, err, "Failed to delete key %d", i)
+	}
+
+	// Verify odd keys exist and even keys don't
+	for i := 1; i <= 100; i++ {
+		val, found, err := tree.Get(i)
+		require.NoError(t, err, "Error when getting key %d", i)
+
+		if i%2 == 1 {
+			// Odd keys should exist
+			require.True(t, found, "Should find odd key %d", i)
+			require.Equal(t, fmt.Sprintf("value%d", i), val, "Retrieved value should match for key %d", i)
+		} else {
+			// Even keys should be deleted
+			require.False(t, found, "Should not find even key %d", i)
+			require.Equal(t, "", val, "Value should be empty for deleted key %d", i)
 		}
-	}
-
-	// Test range query
-	results := make(map[string]string)
-	err := tree.Range("banana", "kiwi", func(k, v string) bool {
-		results[k] = v
-		return true
-	})
-
-	if err != nil {
-		t.Fatalf("Range query failed: %v", err)
-	}
-
-	// Expected keys in range [banana, kiwi]
-	expectedKeys := []string{"banana", "cherry", "date", "fig", "grape", "kiwi"}
-
-	if len(results) != len(expectedKeys) {
-		t.Fatalf("Expected %d results, got %d", len(expectedKeys), len(results))
-	}
-
-	for _, k := range expectedKeys {
-		v, ok := results[k]
-		if !ok {
-			t.Fatalf("Expected key %s in range results", k)
-		}
-		if v != testData[k] {
-			t.Fatalf("Expected value %s for key %s, got %s", testData[k], k, v)
-		}
-	}
-
-	// Test early termination
-	count := 0
-	err = tree.Range("apple", "mango", func(k, v string) bool {
-		count++
-		return count < 3 // Stop after 3 items
-	})
-
-	if err != nil {
-		t.Fatalf("Range query with early termination failed: %v", err)
-	}
-
-	if count != 3 {
-		t.Fatalf("Expected 3 results before termination, got %d", count)
 	}
 }
-
-// TestBPlusTreeSplitting tests node splitting when a node becomes full
-// func TestBPlusTreeSplitting(t *testing.T) {
-// 	// Create a tree with a small order to force splits
-// 	s := &logical.InmemStorage{}
-// 	storage := NewStorageAdapter[int, string](context.Background(), s, "bptree", nil)
-// 	tree, _ := NewBPlusTree(3, intLess, storage)
-
-// 	// Insert keys in order
-// 	for i := 1; i <= 5; i++ {
-// 		t.Logf("Inserting key: %d, value: value-%d", i, i)
-// 		if err := tree.Put(i, fmt.Sprintf("value-%d", i)); err != nil {
-// 			t.Fatalf("Failed to put %d: %v", i, err)
-// 		}
-// 	}
-
-// 	// Debug: print all nodes in storage
-// 	t.Logf("Root ID: %s", storage.rootID)
-// 	t.Logf("Nodes in storage:")
-// 	for id, node := range storage.nodes {
-// 		t.Logf("  Node %s: isLeaf=%v, keys=%v", id, node.isLeaf, node.keys)
-// 		if len(node.children) > 0 {
-// 			childIDs := make([]string, 0, len(node.children))
-// 			for _, child := range node.children {
-// 				if child != nil {
-// 					childIDs = append(childIDs, child.id)
-// 				} else {
-// 					childIDs = append(childIDs, "nil")
-// 				}
-// 			}
-// 			t.Logf("    Children: %v", childIDs)
-// 		}
-// 	}
-
-// 	// Verify all keys can be retrieved
-// 	for i := 1; i <= 5; i++ {
-// 		t.Logf("Retrieving key: %d, expected value: value-%d", i, i)
-// 		value, found, err := tree.Get(i)
-// 		if err != nil {
-// 			t.Fatalf("Error getting %d: %v", i, err)
-// 		}
-// 		if !found {
-// 			t.Fatalf("Key %d not found", i)
-// 		}
-// 		if value != fmt.Sprintf("value-%d", i) {
-// 			t.Fatalf("Expected value-%d, got %s", i, value)
-// 		}
-// 	}
-
-// 	// Verify the tree structure
-// 	if tree.root.isLeaf {
-// 		t.Fatal("Root should not be a leaf after multiple splits")
-// 	}
-
-// 	// Count the number of nodes in the tree
-// 	nodeCount := 0
-// 	for range storage.nodes {
-// 		nodeCount++
-// 	}
-
-// 	// A tree with order 3 and 5 keys should have multiple nodes
-// 	if nodeCount < 3 {
-// 		t.Fatalf("Expected at least 3 nodes, got %d", nodeCount)
-// 	}
-// }
-
-// // TestConcurrentAccess tests concurrent access to the B+ tree
-// func TestConcurrentAccess(t *testing.T) {
-// 	s := &logical.InmemStorage{}
-// 	storage := NewStorageAdapter[int, int](context.Background(), s, "bptree", nil)
-// 	tree, _ := NewBPlusTree(8, intLess, storage)
-
-// 	// Number of concurrent operations
-// 	const numOps = 10
-
-// 	// Insert initial data
-// 	for i := 0; i < numOps; i++ {
-// 		if err := tree.Put(i, i*10); err != nil {
-// 			t.Fatalf("Failed to put %d: %v", i, err)
-// 		}
-// 	}
-
-// 	// Debug: print all nodes in storage
-// 	t.Logf("Root ID: %s", storage.rootID)
-// 	t.Logf("Nodes in storage:")
-// 	for id, node := range storage.nodes {
-// 		t.Logf("  Node %s: isLeaf=%v, keys=%v", id, node.isLeaf, node.keys)
-// 	}
-
-// 	var wg sync.WaitGroup
-// 	wg.Add(2) // 2 goroutines
-
-// 	// Goroutine 1: Read existing keys
-// 	go func() {
-// 		defer wg.Done()
-// 		for i := 0; i < numOps; i++ {
-// 			value, found, err := tree.Get(i)
-// 			if err != nil {
-// 				t.Errorf("Error getting %d: %v", i, err)
-// 				return
-// 			}
-// 			if !found {
-// 				t.Errorf("Key %d not found", i)
-// 				return
-// 			}
-// 			if value != i*10 {
-// 				t.Errorf("Expected %d, got %d", i*10, value)
-// 				return
-// 			}
-// 		}
-// 	}()
-
-// 	// Goroutine 2: Update existing keys
-// 	go func() {
-// 		defer wg.Done()
-// 		for i := 0; i < numOps; i += 2 {
-// 			if err := tree.Put(i, i*20); err != nil {
-// 				t.Errorf("Failed to update %d: %v", i, err)
-// 				return
-// 			}
-// 		}
-// 	}()
-
-// 	wg.Wait()
-
-// 	// Verify the data
-// 	for i := 0; i < numOps; i++ {
-// 		expected := i * 10
-// 		if i%2 == 0 {
-// 			expected = i * 20 // Updated values
-// 		}
-
-// 		value, found, err := tree.Get(i)
-// 		if err != nil {
-// 			t.Fatalf("Error getting %d: %v", i, err)
-// 		}
-// 		if !found {
-// 			t.Fatalf("Key %d not found", i)
-// 		}
-// 		if value != expected {
-// 			t.Fatalf("Expected %d, got %d", expected, value)
-// 		}
-// 	}
-// }
