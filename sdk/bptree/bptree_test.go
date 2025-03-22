@@ -26,8 +26,8 @@ func TestNewBPlusTree(t *testing.T) {
 	t.Run("DefaultOrder", func(t *testing.T) {
 		adapter := NewStorageAdapter[string, string](ctx, "bptree_default", s, nil)
 		tree, err := NewBPlusTree(0, stringLess, adapter)
-		require.NoError(t, err, "Failed to create B+ tree with default order")
-		require.Equal(t, DefaultOrder, tree.order)
+		require.Error(t, err, "Order must be at least 2")
+		require.Nil(t, tree)
 	})
 
 	t.Run("CustomOrder", func(t *testing.T) {
@@ -109,8 +109,6 @@ func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
 	err = tree.Insert(30, "value30")
 	require.NoError(t, err, "Failed to insert key 30")
 
-	tree.PrintTree()
-
 	// Verify all values are accessible
 	testCases := []struct {
 		key   int
@@ -132,37 +130,37 @@ func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
 	err = tree.Insert(40, "value40")
 	require.NoError(t, err, "Failed to insert key 40")
 
-	// err = tree.Insert(50, "value50")
-	// require.NoError(t, err, "Failed to insert key 50")
+	err = tree.Insert(50, "value50")
+	require.NoError(t, err, "Failed to insert key 50")
 
-	// err = tree.Insert(60, "value60")
-	// require.NoError(t, err, "Failed to insert key 60")
+	err = tree.Insert(60, "value60")
+	require.NoError(t, err, "Failed to insert key 60")
 
-	// err = tree.Insert(70, "value70")
-	// require.NoError(t, err, "Failed to insert key 70")
+	err = tree.Insert(70, "value70")
+	require.NoError(t, err, "Failed to insert key 70")
 
-	// err = tree.Insert(80, "value80")
-	// require.NoError(t, err, "Failed to insert key 80")
+	err = tree.Insert(80, "value80")
+	require.NoError(t, err, "Failed to insert key 80")
 
-	// // Verify all values after more complex splitting
-	// for _, tc := range []struct {
-	// 	key   int
-	// 	value string
-	// }{
-	// 	{10, "value10"},
-	// 	{20, "value20"},
-	// 	{30, "value30"},
-	// 	{40, "value40"},
-	// 	{50, "value50"},
-	// 	{60, "value60"},
-	// 	{70, "value70"},
-	// 	{80, "value80"},
-	// } {
-	// 	val, found, err := tree.Get(tc.key)
-	// 	require.NoError(t, err, fmt.Sprintf("Error when getting key %d", tc.key))
-	// 	require.True(t, found, fmt.Sprintf("Should find inserted key %d", tc.key))
-	// 	require.Equal(t, tc.value, val, fmt.Sprintf("Retrieved value should match inserted value for key %d", tc.key))
-	// }
+	// Verify all values after more complex splitting
+	for _, tc := range []struct {
+		key   int
+		value string
+	}{
+		{10, "value10"},
+		{20, "value20"},
+		{30, "value30"},
+		{40, "value40"},
+		{50, "value50"},
+		{60, "value60"},
+		{70, "value70"},
+		{80, "value80"},
+	} {
+		val, found, err := tree.Get(tc.key)
+		require.NoError(t, err, fmt.Sprintf("Error when getting key %d", tc.key))
+		require.True(t, found, fmt.Sprintf("Should find inserted key %d", tc.key))
+		require.Equal(t, tc.value, val, fmt.Sprintf("Retrieved value should match inserted value for key %d", tc.key))
+	}
 }
 
 func TestBPlusTreeDelete(t *testing.T) {
