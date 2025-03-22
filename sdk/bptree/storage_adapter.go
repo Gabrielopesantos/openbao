@@ -98,17 +98,17 @@ func (a *StorageAdapter[K, V]) SaveNode(node *Node[K, V]) error {
 
 	data, err := a.serializer.Serialize(node)
 	if err != nil {
-		return fmt.Errorf("failed to serialize node %s: %w", node.Id, err)
+		return fmt.Errorf("failed to serialize node %s: %w", node.ID, err)
 	}
 
-	path := a.prefix + NodePath + "/" + node.Id
+	path := a.prefix + NodePath + "/" + node.ID
 	entry := &logical.StorageEntry{
 		Key:   path,
 		Value: data,
 	}
 
 	if err := a.storage.Put(a.ctx, entry); err != nil {
-		return fmt.Errorf("failed to save node %s: %w", node.Id, err)
+		return fmt.Errorf("failed to save node %s: %w", node.ID, err)
 	}
 
 	return nil
