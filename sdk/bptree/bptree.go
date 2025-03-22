@@ -27,7 +27,7 @@ type BPlusTree[K comparable, V any] struct {
 // NewBPlusTree creates a new B+ tree with the specified order and comparison function
 func NewBPlusTree[K comparable, V any](order int, less func(a, b K) bool, storage NodeStorage[K, V]) (*BPlusTree[K, V], error) {
 	if order < 2 {
-		order = DefaultOrder
+		return nil, fmt.Errorf("order must be at least 2, got %d", order)
 	}
 
 	if less == nil {
@@ -75,6 +75,26 @@ func NewBPlusTree[K comparable, V any](order int, less func(a, b K) bool, storag
 	return tree, nil
 }
 
+// minKeys returns the minimum number of keys a node must have
+func (t *BPlusTree[K, V]) minKeys() int {
+	return (t.order + 1) / 2 // ⌈m/2⌉
+}
+
+// maxKeys returns the maximum number of keys a node can have
+func (t *BPlusTree[K, V]) maxKeys() int {
+	return t.order // m
+}
+
+// isOverfull checks if a node has exceeded its maximum capacity
+func (t *BPlusTree[K, V]) isOverfull(node *Node[K, V]) bool {
+	return len(node.Keys) > t.maxKeys()
+}
+
+// isUnderfull checks if a node has fallen below its minimum capacity
+func (t *BPlusTree[K, V]) isUnderfull(node *Node[K, V]) bool {
+	return len(node.Keys) < t.minKeys()
+}
+
 // Get retrieves a value by key
 func (t *BPlusTree[K, V]) Get(key K) (V, bool, error) {
 	t.lock.RLock()
@@ -83,18 +103,44 @@ func (t *BPlusTree[K, V]) Get(key K) (V, bool, error) {
 }
 
 func (t *BPlusTree[K, V]) get(key K) (V, bool, error) {
+	node := t.root
 	var zero V
-	leaf, err := t.findLeaf(key)
-	if err != nil {
-		return zero, false, err
+	for !node.IsLeaf {
+		found := false
+		for i, k := range node.Keys {
+			// If search key is less than current key, go left
+			if t.less(key, k) {
+				var err error
+				node, err = t.storage.LoadNode(node.ChildrenIDs[i])
+				if err != nil {
+					return zero, false, err
+				}
+				found = true
+				break
+			}
+		}
+		// If we didn't find a key greater than search key, go right
+		if !found {
+			var err error
+			node, err = t.storage.LoadNode(node.ChildrenIDs[len(node.ChildrenIDs)-1])
+			if err != nil {
+				return zero, false, err
+			}
+		}
 	}
 
-	idx, found := leaf.findKeyIndex(key, t.less)
-	if !found {
-		return zero, false, ErrKeyNotFound
+	// If we get here, we are at a leaf node
+	for i, k := range node.Keys {
+		if t.less(k, key) {
+			continue
+		}
+		if k == key {
+			return node.Values[i], true, nil
+		}
+		break // If we find a key greater than search key, we can stop
 	}
 
-	return leaf.Values[idx], true, nil
+	return zero, false, ErrKeyNotFound
 }
 
 // Insert inserts a key-value pair
@@ -102,30 +148,35 @@ func (t *BPlusTree[K, V]) Insert(key K, value V) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	_, found, err := t.get(key)
-	if err != nil && err != ErrKeyNotFound {
-		return err
-	}
-
-	if found { // TODO: Update or probably support multiple values.
-		return errors.New("key already exists")
-	}
-
-	leaf, err := t.findLeaf(key)
+	leaf, err := t.findLeafNode(key)
 	if err != nil {
 		return err
 	}
 
-	// If this insert operation doesn't cause the leaf
-	// node to overflow, we can insert the key-value pair directly.
-	log.Printf("Keys: %v | Leaf Keys: %d | Order: %d", leaf.Keys, len(leaf.Keys), t.order)
-	if len(leaf.Keys) < 2*t.order {
-		log.Printf("Inserting into leaf")
-		return t.insertIntoLeaf(leaf, key, value)
+	err = t.insertIntoLeaf(leaf, key, value)
+	if err != nil {
+		return err
 	}
 
-	log.Printf("Splitting leaf")
-	return t.insertIntoLeafAfterSplitting(leaf, key, value)
+	// If the leaf is overfull, we need to split it
+	if t.isOverfull(leaf) {
+		newLeaf, splitKey := t.splitLeafNode(leaf)
+		// Save both leaf nodes after splitting
+		if err := t.storage.SaveNode(leaf); err != nil {
+			return fmt.Errorf("failed to save original leaf node: %w", err)
+		}
+		if err := t.storage.SaveNode(newLeaf); err != nil {
+			return fmt.Errorf("failed to save new leaf node: %w", err)
+		}
+		return t.insertIntoParent(leaf, newLeaf, splitKey)
+	}
+
+	// Save the leaf node after insertion
+	if err := t.storage.SaveNode(leaf); err != nil {
+		return fmt.Errorf("failed to save leaf node: %w", err)
+	}
+
+	return nil
 }
 
 // Delete removes a key-value pair
@@ -133,121 +184,100 @@ func (t *BPlusTree[K, V]) Delete(key K) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	// Find the leaf node containing the key
-	leaf, err := t.findLeaf(key)
+	leaf, err := t.findLeafNode(key)
 	if err != nil {
 		return err
 	}
-	if leaf == nil {
-		return ErrKeyNotFound
-	}
 
-	// Find the key in the leaf
+	// Check if the key exists in the leaf node
 	idx, found := leaf.findKeyIndex(key, t.less)
 	if !found {
 		return ErrKeyNotFound
 	}
 
-	// Remove the key-value pair from the leaf
+	// Delete the key-value pair
 	leaf.Keys = append(leaf.Keys[:idx], leaf.Keys[idx+1:]...)
 	leaf.Values = append(leaf.Values[:idx], leaf.Values[idx+1:]...)
 
-	// Save the updated leaf node
+	// Save the leaf node after deletion
 	if err := t.storage.SaveNode(leaf); err != nil {
-		return err
+		return fmt.Errorf("failed to save leaf node: %w", err)
 	}
 
-	// If the leaf is empty and it's not the root, we should handle that
-	// (For a complete implementation, we would need to merge or redistribute keys)
+	// NOTE: Handle underflow
 
 	return nil
 }
 
 // findLeaf finds the leaf node where a key belongs
-func (t *BPlusTree[K, V]) findLeaf(key K) (*Node[K, V], error) {
+// TODO (gabrielopesantos): Maybe accept a node (instead of always starting from the root)
+func (t *BPlusTree[K, V]) findLeafNode(key K) (*Node[K, V], error) {
 	curr := t.root
 	for !curr.IsLeaf {
-		idx, _ := curr.findKeyIndex(key, t.less)
-		currID := curr.ChildrenIDs[idx]
-		var err error
-		curr, err = t.storage.LoadNode(currID)
-		if err != nil {
-			return nil, err
+		for i, k := range curr.Keys {
+			if t.less(k, key) {
+				continue
+			}
+
+			var err error
+			curr, err = t.storage.LoadNode(curr.ChildrenIDs[i])
+			if err != nil {
+				return nil, err
+			}
+			break
 		}
 	}
 
 	return curr, nil
 }
 
+func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
+	// Create a new leaf node
+	newLeaf := NewLeafNode[K, V](genUuid())
+
+	// Determine split point so that both nodes meet minimum occupancy
+	// For leaf nodes, we want to ensure both nodes have at least ⌈m/2⌉ keys
+	splitIndex := t.minKeys()
+
+	// Move second half keys/values to new leaf
+	newLeaf.Keys = leaf.Keys[splitIndex:]
+	newLeaf.Values = leaf.Values[splitIndex:]
+
+	// Update original leaf with first half
+	leaf.Keys = leaf.Keys[:splitIndex]
+	leaf.Values = leaf.Values[:splitIndex]
+
+	// Return new leaf and split key to be copied into the parent
+	return newLeaf, newLeaf.Keys[0]
+}
+
 func (t *BPlusTree[K, V]) insertIntoLeaf(leaf *Node[K, V], key K, value V) error {
-	idx, _ := leaf.findKeyIndex(key, t.less)
-	leaf.insertKeyValue(idx, key, value)
-	err := t.storage.SaveNode(leaf)
-	if err != nil {
-		return err
+	var position int
+	for position < len(leaf.Keys) && t.less(leaf.Keys[position], key) {
+		position++
+	}
+
+	// Append to make room for the new element
+	leaf.Keys = append(leaf.Keys, key)
+	leaf.Values = append(leaf.Values, value)
+
+	// If we're not appending to the end, shift elements to make room
+	if position < len(leaf.Keys)-1 {
+		copy(leaf.Keys[position+1:], leaf.Keys[position:len(leaf.Keys)-1])
+		copy(leaf.Values[position+1:], leaf.Values[position:len(leaf.Values)-1])
+		leaf.Keys[position] = key
+		leaf.Values[position] = value
 	}
 
 	return nil
 }
 
-// insertIntoLeafAfterSplitting handles insertion when a leaf node is full
-func (t *BPlusTree[K, V]) insertIntoLeafAfterSplitting(leaf *Node[K, V], key K, value V) error {
-	// Create a new leaf node
-	newLeaf := NewLeafNode[K, V](genUuid())
-
-	// Make temporary slices to hold all keys and values including the new one
-	tempKeys := make([]K, 0, len(leaf.Keys)+1)
-	tempValues := make([]V, 0, len(leaf.Values)+1)
-
-	// Find position where the new key should be inserted
-	insertPos, _ := leaf.findKeyIndex(key, t.less)
-
-	// Fill temporary slices in proper order
-	for i := 0; i < len(leaf.Keys); i++ {
-		if i == insertPos {
-			tempKeys = append(tempKeys, key)
-			tempValues = append(tempValues, value)
-		}
-		tempKeys = append(tempKeys, leaf.Keys[i])
-		tempValues = append(tempValues, leaf.Values[i])
-	}
-
-	// If the key belongs at the end
-	if insertPos == len(leaf.Keys) {
-		tempKeys = append(tempKeys, key)
-		tempValues = append(tempValues, value)
-	}
-
-	// Determine split point so that order-1 elements are in the original leaf
-	// and order elements are in the new leaf
-	splitPoint := t.order - 1
-
-	// Update original leaf with first half
-	leaf.Keys = tempKeys[:splitPoint]
-	leaf.Values = tempValues[:splitPoint]
-
-	// Update new leaf with second half
-	newLeaf.Keys = tempKeys[splitPoint:]
-	newLeaf.Values = tempValues[splitPoint:]
-
-	// Save both nodes
-	if err := t.storage.SaveNode(leaf); err != nil {
-		return err
-	}
-	if err := t.storage.SaveNode(newLeaf); err != nil {
-		return err
-	}
-
-	// Insert the first key of the new leaf into the parent
-	return t.insertIntoParent(leaf, newLeaf.Keys[0], newLeaf)
-}
-
 // insertIntoParent inserts a key and right node into the parent of left node
-func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], key K, rightNode *Node[K, V]) error {
+func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], rightNode *Node[K, V], splitKey K) error {
 	// If leftNode is the root, create a new root
 	if leftNode.ID == t.root.ID {
 		newRoot := NewInternalNode[K, V](genUuid())
-		newRoot.Keys = []K{key}
+		newRoot.Keys = []K{splitKey}
 		newRoot.ChildrenIDs = []string{leftNode.ID, rightNode.ID}
 
 		// Update parent references
@@ -280,107 +310,78 @@ func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], key K, rightNod
 
 	// Find position in parent to insert the new key and child
 	var insertPos int
-	for insertPos < len(parent.Keys) && t.less(parent.Keys[insertPos], leftNode.Keys[0]) {
+	for insertPos < len(parent.Keys) && t.less(parent.Keys[insertPos], splitKey) {
 		insertPos++
 	}
 
-	// If parent is not full, insert directly
-	if len(parent.Keys) < t.order-1 {
-		// Insert key
-		parent.Keys = append(parent.Keys, key)
-		copy(parent.Keys[insertPos+1:], parent.Keys[insertPos:len(parent.Keys)-1])
-		parent.Keys[insertPos] = key
+	// Insert the split key and right node into the parent
+	parent.Keys = append(parent.Keys, splitKey)
+	copy(parent.Keys[insertPos+1:], parent.Keys[insertPos:len(parent.Keys)-1])
+	parent.Keys[insertPos] = splitKey
+	parent.ChildrenIDs = append(parent.ChildrenIDs, rightNode.ID)
+	copy(parent.ChildrenIDs[insertPos+2:], parent.ChildrenIDs[insertPos+1:len(parent.ChildrenIDs)-1])
+	parent.ChildrenIDs[insertPos+1] = rightNode.ID
 
-		// Insert child ID
-		parent.ChildrenIDs = append(parent.ChildrenIDs, rightNode.ID)
-		copy(parent.ChildrenIDs[insertPos+2:], parent.ChildrenIDs[insertPos+1:len(parent.ChildrenIDs)-1])
-		parent.ChildrenIDs[insertPos+1] = rightNode.ID
+	rightNode.ParentID = parent.ID
 
-		// Update right node's parent reference
-		rightNode.ParentID = parent.ID
-
-		// Save the updated nodes
-		if err := t.storage.SaveNode(rightNode); err != nil {
-			return err
-		}
-		return t.storage.SaveNode(parent)
+	// Save the updated nodes
+	if err := t.storage.SaveNode(rightNode); err != nil {
+		return fmt.Errorf("failed to save right node: %w", err)
+	}
+	if err := t.storage.SaveNode(parent); err != nil {
+		return fmt.Errorf("failed to save parent node: %w", err)
 	}
 
-	// Parent is full, need to split it
-	return t.splitInternalNode(parent, insertPos, key, rightNode)
+	// If the internal node is overfull, we need to split it
+	if t.isOverfull(parent) {
+		newInternal, splitKey := t.splitInternalNode(parent)
+		// Save both internal nodes after splitting
+		if err := t.storage.SaveNode(parent); err != nil {
+			return fmt.Errorf("failed to save original internal node: %w", err)
+		}
+		if err := t.storage.SaveNode(newInternal); err != nil {
+			return fmt.Errorf("failed to save new internal node: %w", err)
+		}
+		return t.insertIntoParent(parent, newInternal, splitKey)
+	}
+
+	return nil
 }
 
-// splitInternalNode splits an internal node when it's full
-func (t *BPlusTree[K, V]) splitInternalNode(node *Node[K, V], insertPos int, key K, rightChild *Node[K, V]) error {
-	// Create temporary slices for all keys and children
-	tempKeys := make([]K, len(node.Keys)+1)
-	tempChildren := make([]string, len(node.ChildrenIDs)+1)
-
-	// Copy keys before insert position
-	copy(tempKeys[:insertPos], node.Keys[:insertPos])
-
-	// Insert the new key
-	tempKeys[insertPos] = key
-
-	// Copy remaining keys
-	copy(tempKeys[insertPos+1:], node.Keys[insertPos:])
-
-	// Copy children pointers before insert position (including the one at insert position)
-	copy(tempChildren[:insertPos+1], node.ChildrenIDs[:insertPos+1])
-
-	// Insert the new child pointer
-	tempChildren[insertPos+1] = rightChild.ID
-
-	// Copy remaining children pointers
-	copy(tempChildren[insertPos+2:], node.ChildrenIDs[insertPos+1:])
-
+func (t *BPlusTree[K, V]) splitInternalNode(node *Node[K, V]) (*Node[K, V], K) {
 	// Create a new internal node
-	newNode := NewInternalNode[K, V](genUuid())
+	newInternal := NewInternalNode[K, V](genUuid())
 
-	// Split point is order-1 to maintain B+ tree properties
-	splitPoint := t.order - 1
+	// Determine split point so that both nodes meet minimum occupancy
+	// For internal nodes, we want to ensure both nodes have at least ⌈m/2⌉ children
+	splitIndex := t.minKeys()
 
-	// Key to move up to the parent
-	promoteKey := tempKeys[splitPoint]
+	// The key at splitIndex is promoted, so do not copy it to any node
+	newSplitKey := node.Keys[splitIndex]
 
-	// Update original node with entries before the split
-	node.Keys = tempKeys[:splitPoint]
-	node.ChildrenIDs = tempChildren[:splitPoint+1]
+	// Copy keys and children after splitIndex to newInternal
+	newInternal.Keys = node.Keys[splitIndex+1:]
+	newInternal.ChildrenIDs = node.ChildrenIDs[splitIndex+1:]
 
-	// Add entries after split to new node (excluding the promoted key)
-	newNode.Keys = tempKeys[splitPoint+1:]
-	newNode.ChildrenIDs = tempChildren[splitPoint+1:]
+	// Update original node with first half
+	node.Keys = node.Keys[:splitIndex]
+	node.ChildrenIDs = node.ChildrenIDs[:splitIndex]
 
-	// Update parent references for children of the new node
-	for _, childID := range newNode.ChildrenIDs {
+	// Update parent references of newInternal's children
+	for _, childID := range newInternal.ChildrenIDs {
 		child, err := t.storage.LoadNode(childID)
 		if err != nil {
-			return err
+			// Log error but continue since we can't fail here
+			continue
 		}
-
-		child.ParentID = newNode.ID
-
+		child.ParentID = newInternal.ID
 		if err := t.storage.SaveNode(child); err != nil {
-			return err
+			// Log error but continue since we can't fail here
+			continue
 		}
 	}
 
-	// Set parent of right child to new node
-	rightChild.ParentID = newNode.ID
-
-	// Save all modified nodes
-	if err := t.storage.SaveNode(rightChild); err != nil {
-		return err
-	}
-	if err := t.storage.SaveNode(node); err != nil {
-		return err
-	}
-	if err := t.storage.SaveNode(newNode); err != nil {
-		return err
-	}
-
-	// Recursively insert the promoted key into the parent
-	return t.insertIntoParent(node, promoteKey, newNode)
+	return newInternal, newSplitKey
 }
 
 // TODO: Move to a better place and review if we need this
@@ -390,4 +391,66 @@ func genUuid() string {
 		panic(err)
 	}
 	return aUuid
+}
+
+// PrintTree prints a visual representation of the B+ tree
+func (t *BPlusTree[K, V]) PrintTree() error {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	if t.root == nil {
+		fmt.Println("Empty tree")
+		return nil
+	}
+
+	return t.printNode(t.root, "", true)
+}
+
+// printNode recursively prints a node and its children
+func (t *BPlusTree[K, V]) printNode(node *Node[K, V], prefix string, isLast bool) error {
+	// Print the current node
+	if node.IsLeaf {
+		log.Printf("%s%s Leaf Node (ID: %s)\n", prefix, getPrefix(isLast), node.ID)
+		log.Printf("%s%s Keys: %v\n", prefix, getPrefix(isLast), node.Keys)
+		log.Printf("%s%s Values: %v\n", prefix, getPrefix(isLast), node.Values)
+	} else {
+		log.Printf("%s%s Internal Node (ID: %s)\n", prefix, getPrefix(isLast), node.ID)
+		log.Printf("%s%s Keys: %v\n", prefix, getPrefix(isLast), node.Keys)
+	}
+
+	// Print children for internal nodes
+	if !node.IsLeaf {
+		for i, childID := range node.ChildrenIDs {
+			child, err := t.storage.LoadNode(childID)
+			if err != nil {
+				return fmt.Errorf("failed to load child node %s: %w", childID, err)
+			}
+
+			// Determine if this is the last child
+			isLastChild := i == len(node.ChildrenIDs)-1
+
+			// Create the prefix for the next level
+			nextPrefix := prefix
+			if isLast {
+				nextPrefix += "    "
+			} else {
+				nextPrefix += "│   "
+			}
+
+			// Recursively print the child
+			if err := t.printNode(child, nextPrefix, isLastChild); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// getPrefix returns the appropriate prefix character for tree visualization
+func getPrefix(isLast bool) string {
+	if isLast {
+		return "└── "
+	}
+	return "├── "
 }
