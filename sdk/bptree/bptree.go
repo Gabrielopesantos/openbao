@@ -107,49 +107,20 @@ func (t *BPlusTree[K, V]) Get(key K) (V, bool, error) {
 }
 
 func (t *BPlusTree[K, V]) get(key K) (V, bool, error) {
-	node, err := t.getRoot()
-	if err != nil {
-		var zero V
-		return zero, false, err
-	}
-
 	var zero V
-	for !node.IsLeaf {
-		found := false
-		for i, k := range node.Keys {
-			// If search key is less than current key, go left
-			if t.less(key, k) {
-				var err error
-				node, err = t.storage.LoadNode(node.ChildrenIDs[i])
-				if err != nil {
-					return zero, false, err
-				}
-				found = true
-				break
-			}
-		}
-		// If we didn't find a key greater than search key, go right
-		if !found {
-			var err error
-			node, err = t.storage.LoadNode(node.ChildrenIDs[len(node.ChildrenIDs)-1])
-			if err != nil {
-				return zero, false, err
-			}
-		}
+	leaf, err := t.findLeafNode(key)
+	if err != nil {
+		return zero, false, fmt.Errorf("failed to find leaf node: %w", err)
 	}
 
 	// If we get here, we are at a leaf node
-	for i, k := range node.Keys {
-		if t.less(k, key) {
-			continue
-		}
-		if k == key {
-			return node.Values[i], true, nil
-		}
-		break // If we find a key greater than search key, we can stop
+	idx, found := leaf.findKeyIndex(key, t.less)
+	if found {
+		return leaf.Values[idx], true, nil
 	}
 
-	return zero, false, ErrKeyNotFound
+	// Key not found is a valid state, not an error
+	return zero, false, nil
 }
 
 // Insert inserts a key-value pair
@@ -205,15 +176,14 @@ func (t *BPlusTree[K, V]) Delete(key K) error {
 	}
 
 	// Delete the key-value pair
-	leaf.Keys = append(leaf.Keys[:idx], leaf.Keys[idx+1:]...)
-	leaf.Values = append(leaf.Values[:idx], leaf.Values[idx+1:]...)
+	leaf.removeKeyValue(idx)
 
 	// Save the leaf node after deletion
 	if err := t.storage.SaveNode(leaf); err != nil {
 		return fmt.Errorf("failed to save leaf node: %w", err)
 	}
 
-	// NOTE: Handle underflow
+	// TODO (gabrielopesantos): Handle underflow
 
 	return nil
 }
@@ -272,23 +242,8 @@ func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
 }
 
 func (t *BPlusTree[K, V]) insertIntoLeaf(leaf *Node[K, V], key K, value V) error {
-	var position int
-	for position < len(leaf.Keys) && t.less(leaf.Keys[position], key) {
-		position++
-	}
-
-	// Append to make room for the new element
-	leaf.Keys = append(leaf.Keys, key)
-	leaf.Values = append(leaf.Values, value)
-
-	// If we're not appending to the end, shift elements to make room
-	if position < len(leaf.Keys)-1 {
-		copy(leaf.Keys[position+1:], leaf.Keys[position:len(leaf.Keys)-1])
-		copy(leaf.Values[position+1:], leaf.Values[position:len(leaf.Values)-1])
-		leaf.Keys[position] = key
-		leaf.Values[position] = value
-	}
-
+	idx, _ := leaf.findKeyIndex(key, t.less)
+	leaf.insertKeyValue(idx, key, value)
 	return nil
 }
 
@@ -330,18 +285,11 @@ func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], rightNode *Node
 	}
 
 	// Find position in parent to insert the new key and child
-	var insertPos int
-	for insertPos < len(parent.Keys) && t.less(parent.Keys[insertPos], splitKey) {
-		insertPos++
-	}
+	insertPos, _ := parent.findKeyIndex(splitKey, t.less)
 
 	// Insert the split key and right node into the parent
-	parent.Keys = append(parent.Keys, splitKey)
-	copy(parent.Keys[insertPos+1:], parent.Keys[insertPos:len(parent.Keys)-1])
-	parent.Keys[insertPos] = splitKey
-	parent.ChildrenIDs = append(parent.ChildrenIDs, rightNode.ID)
-	copy(parent.ChildrenIDs[insertPos+2:], parent.ChildrenIDs[insertPos+1:len(parent.ChildrenIDs)-1])
-	parent.ChildrenIDs[insertPos+1] = rightNode.ID
+	parent.insertKey(insertPos, splitKey)
+	parent.insertChild(insertPos+1, rightNode.ID)
 
 	rightNode.ParentID = parent.ID
 

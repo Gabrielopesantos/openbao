@@ -15,10 +15,7 @@ func TestNewLeafNode(t *testing.T) {
 	require.True(t, node.IsLeaf)
 	require.Empty(t, node.Keys)
 	require.Empty(t, node.Values)
-	require.Empty(t, node.children)
 	require.Empty(t, node.ChildrenIDs)
-	require.Nil(t, node.parent)
-	require.Nil(t, node.next)
 }
 
 func TestNewInternalNode(t *testing.T) {
@@ -28,10 +25,7 @@ func TestNewInternalNode(t *testing.T) {
 	require.False(t, node.IsLeaf)
 	require.Empty(t, node.Keys)
 	require.Empty(t, node.Values)
-	require.Empty(t, node.children)
 	require.Empty(t, node.ChildrenIDs)
-	require.Nil(t, node.parent)
-	require.Nil(t, node.next)
 }
 
 func TestFindKeyIndex(t *testing.T) {
@@ -152,17 +146,9 @@ func TestInsertChild(t *testing.T) {
 		parent := NewInternalNode[int, string]("parent")
 		child1 := NewLeafNode[int, string]("child1")
 
-		parent.insertChild(0, child1)
-
-		require.Equal(t, 1, len(parent.children))
+		parent.insertChild(0, child1.ID)
 		require.Equal(t, 1, len(parent.ChildrenIDs))
-
 		require.Equal(t, child1.ID, parent.ChildrenIDs[0])
-		require.Equal(t, child1, parent.children[0])
-
-		require.NotNil(t, child1.parent)
-		require.Equal(t, parent.ID, child1.ParentID)
-		require.Equal(t, parent, child1.parent)
 	})
 
 	t.Run("InsertMultipleChildren", func(t *testing.T) {
@@ -171,19 +157,12 @@ func TestInsertChild(t *testing.T) {
 		child2 := NewLeafNode[int, string]("child2")
 		child3 := NewLeafNode[int, string]("child3")
 
-		parent.insertChild(0, child1)
-		parent.insertChild(1, child3) // Add at the end
-		parent.insertChild(1, child2) // Insert in the middle
+		parent.insertChild(0, child1.ID)
+		parent.insertChild(1, child3.ID) // Add at the end
+		parent.insertChild(1, child2.ID) // Insert in the middle
 
-		require.Equal(t, 3, len(parent.children))
 		require.Equal(t, 3, len(parent.ChildrenIDs))
 		require.Equal(t, []string{"child1", "child2", "child3"}, parent.ChildrenIDs)
-		require.Equal(t, []*Node[int, string]{child1, child2, child3}, parent.children)
-
-		// Check parent references
-		require.Equal(t, parent, child1.parent)
-		require.Equal(t, parent, child2.parent)
-		require.Equal(t, parent, child3.parent)
 	})
 }
 
@@ -240,15 +219,12 @@ func TestRemoveChild(t *testing.T) {
 		child2 := NewLeafNode[int, string]("child2")
 		child3 := NewLeafNode[int, string]("child3")
 
-		parent.children = []*Node[int, string]{child1, child2, child3}
-		parent.ChildrenIDs = []string{"child1", "child2", "child3"}
+		parent.ChildrenIDs = []string{child1.ID, child2.ID, child3.ID}
 
 		parent.removeChild(1) // Remove child2
 
-		require.Equal(t, 2, len(parent.children))
 		require.Equal(t, 2, len(parent.ChildrenIDs))
-		require.Equal(t, []string{"child1", "child3"}, parent.ChildrenIDs)
-		require.Equal(t, []*Node[int, string]{child1, child3}, parent.children)
+		require.Equal(t, []string{child1.ID, child3.ID}, parent.ChildrenIDs)
 	})
 
 	t.Run("RemoveFromBeginning", func(t *testing.T) {
@@ -257,15 +233,12 @@ func TestRemoveChild(t *testing.T) {
 		child2 := NewLeafNode[int, string]("child2")
 		child3 := NewLeafNode[int, string]("child3")
 
-		parent.children = []*Node[int, string]{child1, child2, child3}
-		parent.ChildrenIDs = []string{"child1", "child2", "child3"}
+		parent.ChildrenIDs = []string{child1.ID, child2.ID, child3.ID}
 
 		parent.removeChild(0) // Remove child1
 
-		require.Equal(t, 2, len(parent.children))
 		require.Equal(t, 2, len(parent.ChildrenIDs))
-		require.Equal(t, []string{"child2", "child3"}, parent.ChildrenIDs)
-		require.Equal(t, []*Node[int, string]{child2, child3}, parent.children)
+		require.Equal(t, []string{child2.ID, child3.ID}, parent.ChildrenIDs)
 	})
 
 	t.Run("RemoveFromEnd", func(t *testing.T) {
@@ -274,27 +247,22 @@ func TestRemoveChild(t *testing.T) {
 		child2 := NewLeafNode[int, string]("child2")
 		child3 := NewLeafNode[int, string]("child3")
 
-		parent.children = []*Node[int, string]{child1, child2, child3}
-		parent.ChildrenIDs = []string{"child1", "child2", "child3"}
+		parent.ChildrenIDs = []string{child1.ID, child2.ID, child3.ID}
 
 		parent.removeChild(2) // Remove child3
 
-		require.Equal(t, 2, len(parent.children))
 		require.Equal(t, 2, len(parent.ChildrenIDs))
-		require.Equal(t, []string{"child1", "child2"}, parent.ChildrenIDs)
-		require.Equal(t, []*Node[int, string]{child1, child2}, parent.children)
+		require.Equal(t, []string{child1.ID, child2.ID}, parent.ChildrenIDs)
 	})
 
 	t.Run("RemoveOnlyChild", func(t *testing.T) {
 		parent := NewInternalNode[int, string]("parent")
 		child := NewLeafNode[int, string]("child")
 
-		parent.children = []*Node[int, string]{child}
-		parent.ChildrenIDs = []string{"child"}
+		parent.ChildrenIDs = []string{child.ID}
 
 		parent.removeChild(0)
 
-		require.Empty(t, parent.children)
 		require.Empty(t, parent.ChildrenIDs)
 	})
 }
@@ -313,7 +281,7 @@ func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	// Create an internal node
 	internalID := "internal-1"
 	internal := NewInternalNode[string, string](internalID)
-	internal.insertChild(0, leaf)
+	internal.insertChild(0, leaf.ID)
 
 	// Save the leaf node (saved after being added to the internal node otherwise there is no reference to parent on it)
 	err := adapter.SaveNode(leaf)
@@ -327,7 +295,6 @@ func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	require.Equal(t, leaf.ID, loadedLeaf.ID, "Expected node ID %s, got %s", leaf.ID, loadedLeaf.ID)
 	require.Equal(t, leaf.Keys, loadedLeaf.Keys, "Expected node keys %v, got %v", leaf.Keys, loadedLeaf.Keys)
 	require.Equal(t, leaf.Values, loadedLeaf.Values, "Expected node values %v, got %v", leaf.Values, loadedLeaf.Values)
-	require.Nil(t, loadedLeaf.parent, "Parent should not be loaded")
 
 	// Save the internal node
 	err = adapter.SaveNode(internal)
@@ -340,6 +307,4 @@ func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 
 	require.Equal(t, internal.ID, loadedInternal.ID, "Expected node ID %s, got %s", internal.ID, loadedInternal.ID)
 	require.Equal(t, internal.ChildrenIDs, loadedInternal.ChildrenIDs, "Expected node children keys %v, got %v", internal.ChildrenIDs, loadedInternal.ChildrenIDs)
-	require.Empty(t, loadedInternal.children, "Children should not be loaded")
-	require.Nil(t, loadedInternal.parent, "Parent should not be loaded")
 }
