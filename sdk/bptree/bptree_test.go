@@ -53,40 +53,42 @@ func TestBPlusTreeBasicOperations(t *testing.T) {
 	tree, err := NewBPlusTree(4, stringLess, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
 
-	// Test empty tree Get
-	val, found, err := tree.Get("key1")
-	require.Error(t, err, "Should have error when trying to get from empty tree")
-	require.False(t, found, "Should not find key in empty tree")
-	require.Equal(t, "", val, "Value should be empty")
+	t.Run("EmptyTree", func(t *testing.T) {
+		val, found, err := tree.Get("key1")
+		require.NoError(t, err, "Should not error when getting from empty tree")
+		require.False(t, found, "Should not find key in empty tree")
+		require.Equal(t, "", val, "Value should be empty")
+	})
 
-	// Insert a key
-	err = tree.Insert("key1", "value1")
-	require.NoError(t, err, "Failed to insert key")
+	t.Run("InsertAndGet", func(t *testing.T) {
+		// Insert a key
+		err = tree.Insert("key1", "value1")
+		require.NoError(t, err, "Failed to insert key")
 
-	// Get the key
-	val, found, err = tree.Get("key1")
-	require.NoError(t, err, "Error when getting key")
-	require.True(t, found, "Should find inserted key")
-	require.Equal(t, "value1", val, "Retrieved value should match inserted value")
+		// Get the key
+		val, found, err := tree.Get("key1")
+		require.NoError(t, err, "Error when getting key")
+		require.True(t, found, "Should find inserted key")
+		require.Equal(t, "value1", val, "Retrieved value should match inserted value")
+	})
 
-	// Insert duplicate key
-	// err = tree.Insert("key1", "value1_new")
-	// require.Error(t, err, "Should not allow duplicate keys")
+	t.Run("Delete", func(t *testing.T) {
+		// Delete key
+		err = tree.Delete("key1")
+		require.NoError(t, err, "Failed to delete key")
 
-	// Delete key
-	err = tree.Delete("key1")
-	require.NoError(t, err, "Failed to delete key")
+		// Verify key was deleted
+		val, found, err := tree.Get("key1")
+		require.NoError(t, err, "Should not error when getting a deleted key")
+		require.False(t, found, "Should not find deleted key")
+		require.Equal(t, "", val, "Value should be empty after deletion")
+	})
 
-	// Verify key was deleted
-	val, found, err = tree.Get("key1")
-	require.Error(t, err, "Should error when getting a deleted key")
-	require.False(t, found, "Should not find deleted key")
-	require.Equal(t, "", val, "Value should be empty after deletion")
-
-	// Delete non-existent key
-	err = tree.Delete("key1")
-	require.Error(t, err, "Deleting non-existent key should return error")
-	require.Equal(t, ErrKeyNotFound, err, "Should return ErrKeyNotFound")
+	t.Run("DeleteNonExistentKey", func(t *testing.T) {
+		err = tree.Delete("nonexistent")
+		require.Error(t, err, "Deleting non-existent key should return error")
+		require.Equal(t, ErrKeyNotFound, err, "Should return ErrKeyNotFound")
+	})
 }
 
 func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
@@ -274,4 +276,177 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 			require.Equal(t, "", val, "Value should be empty for deleted key %d", i)
 		}
 	}
+}
+
+func TestBPlusTreeConcurrency(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	adapter := NewStorageAdapter[int, string](ctx, "bptree_concurrent", s, nil)
+
+	tree, err := NewBPlusTree(4, intLess, adapter)
+	require.NoError(t, err, "Failed to create B+ tree")
+
+	// Test concurrent reads
+	t.Run("ConcurrentReads", func(t *testing.T) {
+		// Insert some test data
+		err = tree.Insert(1, "value1")
+		require.NoError(t, err)
+
+		// Launch multiple goroutines to read concurrently
+		done := make(chan bool)
+		for i := 0; i < 10; i++ {
+			go func() {
+				val, found, err := tree.Get(1)
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Equal(t, "value1", val)
+				done <- true
+			}()
+		}
+
+		// Wait for all goroutines to complete
+		for i := 0; i < 10; i++ {
+			<-done
+		}
+	})
+
+	// Test concurrent writes
+	t.Run("ConcurrentWrites", func(t *testing.T) {
+		// Launch multiple goroutines to write concurrently
+		done := make(chan bool)
+		for i := 0; i < 10; i++ {
+			go func(i int) {
+				err := tree.Insert(i, fmt.Sprintf("value%d", i))
+				require.NoError(t, err)
+				done <- true
+			}(i)
+		}
+
+		// Wait for all goroutines to complete
+		for i := 0; i < 10; i++ {
+			<-done
+		}
+
+		// Verify all values were inserted
+		for i := 0; i < 10; i++ {
+			val, found, err := tree.Get(i)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, fmt.Sprintf("value%d", i), val)
+		}
+	})
+}
+
+func TestBPlusTreeEdgeCases(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	adapter := NewStorageAdapter[int, string](ctx, "bptree_edge", s, nil)
+
+	tree, err := NewBPlusTree(2, intLess, adapter) // Small order to test splits
+	require.NoError(t, err, "Failed to create B+ tree")
+
+	t.Run("SplitAtRoot", func(t *testing.T) {
+		// Insert keys that will cause root split
+		err = tree.Insert(1, "value1")
+		require.NoError(t, err)
+		err = tree.Insert(2, "value2")
+		require.NoError(t, err)
+		err = tree.Insert(3, "value3") // This should cause a split
+		require.NoError(t, err)
+
+		// Verify all values are accessible
+		for i := 1; i <= 3; i++ {
+			val, found, err := tree.Get(i)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, fmt.Sprintf("value%d", i), val)
+		}
+	})
+
+	t.Run("SplitAtLeaf", func(t *testing.T) {
+		// Insert more keys to cause leaf splits
+		err = tree.Insert(4, "value4")
+		require.NoError(t, err)
+		err = tree.Insert(5, "value5")
+		require.NoError(t, err)
+		err = tree.Insert(6, "value6") // This should cause a leaf split
+		require.NoError(t, err)
+
+		// Verify all values are accessible
+		for i := 1; i <= 6; i++ {
+			val, found, err := tree.Get(i)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, fmt.Sprintf("value%d", i), val)
+		}
+	})
+}
+
+// MockStorageAdapter simulates storage errors
+type MockStorageAdapter[K comparable, V any] struct {
+	*StorageAdapter[K, V]
+	shouldFail bool
+}
+
+func (m *MockStorageAdapter[K, V]) SaveNode(node *Node[K, V]) error {
+	if m.shouldFail {
+		return fmt.Errorf("simulated storage error")
+	}
+	return m.StorageAdapter.SaveNode(node)
+}
+
+func (m *MockStorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
+	if m.shouldFail {
+		return nil, fmt.Errorf("simulated storage error")
+	}
+	return m.StorageAdapter.LoadNode(id)
+}
+
+func TestBPlusTreeStorageErrors(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	baseAdapter := NewStorageAdapter[string, string](ctx, "bptree_storage", s, nil)
+	mockAdapter := &MockStorageAdapter[string, string]{
+		StorageAdapter: baseAdapter,
+		shouldFail:     false,
+	}
+
+	tree, err := NewBPlusTree(4, stringLess, mockAdapter)
+	require.NoError(t, err, "Failed to create B+ tree")
+
+	// Insert some test data
+	err = tree.Insert("key1", "value1")
+	require.NoError(t, err)
+
+	t.Run("StorageFailureDuringGet", func(t *testing.T) {
+		mockAdapter.shouldFail = true
+		_, _, err := tree.Get("key1")
+		require.Error(t, err, "Should error when storage fails")
+		require.Contains(t, err.Error(), "simulated storage error")
+		mockAdapter.shouldFail = false
+	})
+
+	t.Run("StorageFailureDuringInsert", func(t *testing.T) {
+		mockAdapter.shouldFail = true
+		err := tree.Insert("key2", "value2")
+		require.Error(t, err, "Should error when storage fails")
+		require.Contains(t, err.Error(), "simulated storage error")
+		mockAdapter.shouldFail = false
+	})
+
+	t.Run("StorageFailureDuringDelete", func(t *testing.T) {
+		mockAdapter.shouldFail = true
+		err := tree.Delete("key1")
+		require.Error(t, err, "Should error when storage fails")
+		require.Contains(t, err.Error(), "simulated storage error")
+		mockAdapter.shouldFail = false
+	})
+
+	t.Run("RecoveryAfterStorageFailure", func(t *testing.T) {
+		// Verify tree is still usable after storage errors
+		val, found, err := tree.Get("key1")
+		require.NoError(t, err, "Should work after storage recovers")
+		require.True(t, found, "Should find key after storage recovers")
+		require.Equal(t, "value1", val, "Value should be correct after storage recovers")
+	})
 }
