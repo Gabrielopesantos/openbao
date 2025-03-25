@@ -330,9 +330,9 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 		// Verify all values were inserted
 		for i := 0; i < 10; i++ {
 			val, found, err := tree.Get(i)
-			require.NoError(t, err)
-			require.True(t, found)
-			require.Equal(t, fmt.Sprintf("value%d", i), val)
+			require.NoError(t, err, "Error when getting key %d", i)
+			require.True(t, found, "Should find key %d", i)
+			require.Equal(t, fmt.Sprintf("value%d", i), val, "Retrieved value should match for key %d", i)
 		}
 	})
 }

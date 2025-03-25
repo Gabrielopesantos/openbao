@@ -21,13 +21,13 @@ func (c *LRU[K, V]) Delete(key K) {
 	c.lru.Remove(key)
 }
 
-// Load returns the value for a key from the cache.
-func (c *LRU[K, V]) Load(key K) (value V, ok bool) {
+// Get returns the value for a key from the cache.
+func (c *LRU[K, V]) Get(key K) (value V, ok bool) {
 	return c.lru.Get(key)
 }
 
-// Store adds a key-value pair to the cache.
-func (c *LRU[K, V]) Store(key K, value V) {
+// Add adds a key-value pair to the cache.
+func (c *LRU[K, V]) Add(key K, value V) {
 	c.lru.Add(key, value)
 }
 

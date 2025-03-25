@@ -25,24 +25,34 @@ func TestLRU(t *testing.T) {
 		lru, _ := NewLRU[string, int](5)
 
 		// Test Store and Load
-		lru.Store("key1", 1)
-		val, ok := lru.Load("key1")
+		lru.Add("key1", 1)
+		val, ok := lru.Get("key1")
 		if !ok || val != 1 {
 			t.Errorf("Expected (1, true), got (%d, %t)", val, ok)
 		}
 
 		// Test missing key
-		_, ok = lru.Load("missing")
+		_, ok = lru.Get("missing")
 		if ok {
 			t.Error("Expected missing key to return ok=false")
 		}
 
 		// Test Delete
-		lru.Store("key2", 2)
+		lru.Add("key2", 2)
 		lru.Delete("key2")
-		_, ok = lru.Load("key2")
+		_, ok = lru.Get("key2")
 		if ok {
 			t.Error("Expected key to be deleted")
+		}
+	})
+
+	t.Run("Overwrite", func(t *testing.T) {
+		lru, _ := NewLRU[string, int](3)
+		lru.Add("key1", 1)
+		lru.Add("key1", 2)
+		val, ok := lru.Get("key1")
+		if !ok || val != 2 {
+			t.Errorf("Expected (2, true), got (%d, %t)", val, ok)
 		}
 	})
 
@@ -51,18 +61,18 @@ func TestLRU(t *testing.T) {
 		lru, _ := NewLRU[string, int](3)
 
 		// Fill the cache
-		lru.Store("key1", 1)
-		lru.Store("key2", 2)
-		lru.Store("key3", 3)
+		lru.Add("key1", 1)
+		lru.Add("key2", 2)
+		lru.Add("key3", 3)
 
 		// Add one more to trigger eviction
-		lru.Store("key4", 4)
+		lru.Add("key4", 4)
 
 		// One of the keys should be evicted (likely key1 with TwoQueueCache)
 		// But we can't guarantee which one, so just check total keys
 		var count int
 		for _, k := range []string{"key1", "key2", "key3", "key4"} {
-			if _, ok := lru.Load(k); ok {
+			if _, ok := lru.Get(k); ok {
 				count++
 			}
 		}
@@ -75,10 +85,10 @@ func TestLRU(t *testing.T) {
 	// Test with different types
 	t.Run("Different Types", func(t *testing.T) {
 		lru, _ := NewLRU[int, string](5)
-		lru.Store(1, "one")
-		lru.Store(2, "two")
+		lru.Add(1, "one")
+		lru.Add(2, "two")
 
-		val, ok := lru.Load(1)
+		val, ok := lru.Get(1)
 		if !ok || val != "one" {
 			t.Errorf("Expected (\"one\", true), got (%s, %t)", val, ok)
 		}
