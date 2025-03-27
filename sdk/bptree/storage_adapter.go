@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
+	"github.com/openbao/openbao/sdk/v2/lru"
 )
 
 const (
@@ -22,6 +23,7 @@ type StorageAdapter[K comparable, V any] struct {
 	prefix     string
 	storage    logical.Storage
 	serializer NodeSerializer[K, V]
+	cache      *lru.LRU[string, *Node[K, V]]
 }
 
 // NodeSerializer defines how to serialize and deserialize nodes
@@ -53,7 +55,8 @@ func NewStorageAdapter[K comparable, V any](
 	prefix string,
 	storage logical.Storage,
 	serializer NodeSerializer[K, V],
-) *StorageAdapter[K, V] {
+	cacheSize int,
+) (*StorageAdapter[K, V], error) {
 	if !strings.HasSuffix(prefix, "/") {
 		prefix = prefix + "/"
 	}
@@ -62,16 +65,28 @@ func NewStorageAdapter[K comparable, V any](
 		serializer = &JSONSerializer[K, V]{}
 	}
 
+	cache, err := lru.NewLRU[string, *Node[K, V]](cacheSize)
+	if err != nil {
+		return nil, err
+	}
+
 	return &StorageAdapter[K, V]{
 		ctx:        ctx,
 		prefix:     prefix,
 		storage:    storage,
 		serializer: serializer,
-	}
+		cache:      cache,
+	}, nil
 }
 
 // LoadNode loads a node from storage
 func (a *StorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
+	// Try to get from cache first
+	if node, ok := a.cache.Get(id); ok {
+		return node, nil
+	}
+
+	// Load from storage
 	path := a.prefix + NodePath + "/" + id
 	entry, err := a.storage.Get(a.ctx, path)
 	if err != nil {
@@ -86,6 +101,9 @@ func (a *StorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize node %s: %w", id, err)
 	}
+
+	// Cache the loaded node
+	a.cache.Add(id, node)
 
 	return node, nil
 }
@@ -111,6 +129,9 @@ func (a *StorageAdapter[K, V]) SaveNode(node *Node[K, V]) error {
 		return fmt.Errorf("failed to save node %s: %w", node.ID, err)
 	}
 
+	// Update cache
+	a.cache.Add(node.ID, node)
+
 	return nil
 }
 
@@ -120,6 +141,9 @@ func (a *StorageAdapter[K, V]) DeleteNode(id string) error {
 	if err := a.storage.Delete(a.ctx, path); err != nil {
 		return fmt.Errorf("failed to delete node %s: %w", id, err)
 	}
+
+	// Remove from cache
+	a.cache.Delete(id)
 
 	return nil
 }

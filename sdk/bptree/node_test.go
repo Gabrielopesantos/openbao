@@ -270,7 +270,8 @@ func TestRemoveChild(t *testing.T) {
 func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter := NewStorageAdapter[string, string](ctx, "bptree", s, nil)
+	adapter, err := NewStorageAdapter[string, string](ctx, "bptree", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
 
 	// Test SaveNode and LoadNode
 	leafID := "leaf-1"
@@ -284,7 +285,7 @@ func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	internal.insertChild(0, leaf.ID)
 
 	// Save the leaf node (saved after being added to the internal node otherwise there is no reference to parent on it)
-	err := adapter.SaveNode(leaf)
+	err = adapter.SaveNode(leaf)
 	require.NoError(t, err, "Failed to save node")
 
 	// Load the node

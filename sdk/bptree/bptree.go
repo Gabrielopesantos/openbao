@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/hashicorp/go-uuid"
-	"github.com/openbao/openbao/sdk/v2/lru"
 )
 
 // DefaultOrder is the default maximum number of children per B+ tree node
@@ -22,7 +21,6 @@ type BPlusTree[K comparable, V any] struct {
 	storage NodeStorage[K, V]
 	less    func(a, b K) bool
 	lock    sync.RWMutex
-	cache   *lru.LRU[string, *Node[K, V]]
 }
 
 // NewBPlusTree creates a new B+ tree with the specified order and comparison function
@@ -35,18 +33,10 @@ func NewBPlusTree[K comparable, V any](order int, less func(a, b K) bool, storag
 		return nil, errors.New("comparison function cannot be nil")
 	}
 
-	// Create cache with size based on order
-	cacheSize := order * 4 // Adjust cache size based on tree order
-	cache, err := lru.NewLRU[string, *Node[K, V]](cacheSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cache: %w", err)
-	}
-
 	tree := &BPlusTree[K, V]{
 		order:   order,
 		less:    less,
 		storage: storage,
-		cache:   cache,
 	}
 
 	// Initialize the tree with a root node
@@ -430,29 +420,12 @@ func getPrefix(isLast bool) string {
 	return "├── "
 }
 
-// loadNode loads a node from cache or storage
+// loadNode loads a node from storage
 func (t *BPlusTree[K, V]) loadNode(id string) (*Node[K, V], error) {
-	// Try to get from cache first
-	if node, ok := t.cache.Get(id); ok {
-		return node, nil
-	}
-
-	// If not in cache, load from storage
-	node, err := t.storage.LoadNode(id)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load node: %w", err)
-	}
-
-	// Store in cache
-	t.cache.Add(id, node)
-	return node, nil
+	return t.storage.LoadNode(id)
 }
 
-// saveNode saves a node to both storage and cache
+// saveNode saves a node to storage
 func (t *BPlusTree[K, V]) saveNode(node *Node[K, V]) error {
-	if err := t.storage.SaveNode(node); err != nil {
-		return fmt.Errorf("failed to save node: %w", err)
-	}
-	t.cache.Add(node.ID, node)
-	return nil
+	return t.storage.SaveNode(node)
 }
