@@ -24,21 +24,24 @@ func TestNewBPlusTree(t *testing.T) {
 	s := &logical.InmemStorage{}
 
 	t.Run("DefaultOrder", func(t *testing.T) {
-		adapter := NewStorageAdapter[string, string](ctx, "bptree_default", s, nil)
+		adapter, err := NewStorageAdapter[string, string](ctx, "bptree_default", s, nil, 100)
+		require.NoError(t, err, "Failed to create storage adapter")
 		tree, err := NewBPlusTree(0, stringLess, adapter)
 		require.Error(t, err, "Order must be at least 2")
 		require.Nil(t, tree)
 	})
 
 	t.Run("CustomOrder", func(t *testing.T) {
-		adapter := NewStorageAdapter[string, string](ctx, "bptree_custom", s, nil)
+		adapter, err := NewStorageAdapter[string, string](ctx, "bptree_custom", s, nil, 100)
+		require.NoError(t, err, "Failed to create storage adapter")
 		tree, err := NewBPlusTree(4, stringLess, adapter)
 		require.NoError(t, err, "Failed to create B+ tree with custom order")
 		require.Equal(t, 4, tree.order)
 	})
 
 	t.Run("NilComparisonFunction", func(t *testing.T) {
-		adapter := NewStorageAdapter[string, string](ctx, "bptree_nil_comp", s, nil)
+		adapter, err := NewStorageAdapter[string, string](ctx, "bptree_nil_comp", s, nil, 100)
+		require.NoError(t, err, "Failed to create storage adapter")
 		tree, err := NewBPlusTree(4, nil, adapter)
 		require.Error(t, err, "Should fail with nil comparison function")
 		require.Nil(t, tree)
@@ -48,7 +51,8 @@ func TestNewBPlusTree(t *testing.T) {
 func TestBPlusTreeBasicOperations(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter := NewStorageAdapter[string, string](ctx, "bptree_basic", s, nil)
+	adapter, err := NewStorageAdapter[string, string](ctx, "bptree_basic", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
 
 	tree, err := NewBPlusTree(4, stringLess, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
@@ -94,7 +98,8 @@ func TestBPlusTreeBasicOperations(t *testing.T) {
 func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter := NewStorageAdapter[int, string](ctx, "bptree_split", s, nil)
+	adapter, err := NewStorageAdapter[int, string](ctx, "bptree_split", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
 
 	// Create a tree with small order to test splitting
 	tree, err := NewBPlusTree(2, intLess, adapter)
@@ -168,7 +173,8 @@ func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
 func TestBPlusTreeDelete(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter := NewStorageAdapter[string, int](ctx, "bptree_delete", s, nil)
+	adapter, err := NewStorageAdapter[string, int](ctx, "bptree_delete", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
 
 	tree, err := NewBPlusTree(4, stringLess, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
@@ -236,7 +242,8 @@ func TestBPlusTreeDelete(t *testing.T) {
 func TestBPlusTreeLargeDataSet(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter := NewStorageAdapter[int, string](ctx, "bptree_large", s, nil)
+	adapter, err := NewStorageAdapter[int, string](ctx, "bptree_large", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
 
 	tree, err := NewBPlusTree(8, intLess, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
@@ -281,7 +288,8 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 func TestBPlusTreeConcurrency(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter := NewStorageAdapter[int, string](ctx, "bptree_concurrent", s, nil)
+	adapter, err := NewStorageAdapter[int, string](ctx, "bptree_concurrent", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
 
 	tree, err := NewBPlusTree(4, intLess, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
@@ -340,7 +348,8 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 func TestBPlusTreeEdgeCases(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter := NewStorageAdapter[int, string](ctx, "bptree_edge", s, nil)
+	adapter, err := NewStorageAdapter[int, string](ctx, "bptree_edge", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
 
 	tree, err := NewBPlusTree(2, intLess, adapter) // Small order to test splits
 	require.NoError(t, err, "Failed to create B+ tree")
@@ -405,7 +414,8 @@ func (m *MockStorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
 func TestBPlusTreeStorageErrors(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	baseAdapter := NewStorageAdapter[string, string](ctx, "bptree_storage", s, nil)
+	baseAdapter, err := NewStorageAdapter[string, string](ctx, "bptree_storage", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
 	mockAdapter := &MockStorageAdapter[string, string]{
 		StorageAdapter: baseAdapter,
 		shouldFail:     false,
