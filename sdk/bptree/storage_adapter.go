@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
 	"github.com/openbao/openbao/sdk/v2/lru"
@@ -24,6 +25,8 @@ type StorageAdapter[K comparable, V any] struct {
 	storage    logical.Storage
 	serializer NodeSerializer[K, V]
 	cache      *lru.LRU[string, *Node[K, V]]
+	nodesLock  sync.RWMutex
+	rootLock   sync.RWMutex
 }
 
 // NodeSerializer defines how to serialize and deserialize nodes
@@ -80,15 +83,19 @@ func NewStorageAdapter[K comparable, V any](
 }
 
 // LoadNode loads a node from storage
-func (a *StorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
+func (s *StorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
+	// Lock the nodes
+	s.nodesLock.RLock()
+	defer s.nodesLock.RUnlock()
+
 	// Try to get from cache first
-	if node, ok := a.cache.Get(id); ok {
+	if node, ok := s.cache.Get(id); ok {
 		return node, nil
 	}
 
 	// Load from storage
-	path := a.prefix + NodePath + "/" + id
-	entry, err := a.storage.Get(a.ctx, path)
+	path := s.prefix + NodePath + "/" + id
+	entry, err := s.storage.Get(s.ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load node %s: %w", id, err)
 	}
@@ -97,61 +104,74 @@ func (a *StorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
 		return nil, nil
 	}
 
-	node, err := a.serializer.Deserialize(entry.Value)
+	node, err := s.serializer.Deserialize(entry.Value)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize node %s: %w", id, err)
 	}
 
 	// Cache the loaded node
-	a.cache.Add(id, node)
+	s.cache.Add(id, node)
 
 	return node, nil
 }
 
 // SaveNode saves a node to storage
-func (a *StorageAdapter[K, V]) SaveNode(node *Node[K, V]) error {
+func (s *StorageAdapter[K, V]) SaveNode(node *Node[K, V]) error {
+	// Check if the node is nil
 	if node == nil {
 		return fmt.Errorf("cannot save nil node")
 	}
 
-	data, err := a.serializer.Serialize(node)
+	// Lock storage if the node is not nil
+	s.nodesLock.Lock()
+	defer s.nodesLock.Unlock()
+
+	data, err := s.serializer.Serialize(node)
 	if err != nil {
 		return fmt.Errorf("failed to serialize node %s: %w", node.ID, err)
 	}
 
-	path := a.prefix + NodePath + "/" + node.ID
+	path := s.prefix + NodePath + "/" + node.ID
 	entry := &logical.StorageEntry{
 		Key:   path,
 		Value: data,
 	}
 
-	if err := a.storage.Put(a.ctx, entry); err != nil {
+	if err := s.storage.Put(s.ctx, entry); err != nil {
 		return fmt.Errorf("failed to save node %s: %w", node.ID, err)
 	}
 
 	// Update cache
-	a.cache.Add(node.ID, node)
+	s.cache.Add(node.ID, node)
 
 	return nil
 }
 
 // DeleteNode deletes a node from storage
-func (a *StorageAdapter[K, V]) DeleteNode(id string) error {
-	path := a.prefix + NodePath + "/" + id
-	if err := a.storage.Delete(a.ctx, path); err != nil {
+func (s *StorageAdapter[K, V]) DeleteNode(id string) error {
+	// Lock the nodes
+	s.nodesLock.Lock()
+	defer s.nodesLock.Unlock()
+
+	path := s.prefix + NodePath + "/" + id
+	if err := s.storage.Delete(s.ctx, path); err != nil {
 		return fmt.Errorf("failed to delete node %s: %w", id, err)
 	}
 
 	// Remove from cache
-	a.cache.Delete(id)
+	s.cache.Delete(id)
 
 	return nil
 }
 
 // GetRootID gets the ID of the root node
-func (a *StorageAdapter[K, V]) GetRootID() (string, error) {
-	path := a.prefix + MetadataPath + "/" + RootPath
-	entry, err := a.storage.Get(a.ctx, path)
+func (s *StorageAdapter[K, V]) GetRootID() (string, error) {
+	// Lock the root
+	s.rootLock.RLock()
+	defer s.rootLock.RUnlock()
+
+	path := s.prefix + MetadataPath + "/" + RootPath
+	entry, err := s.storage.Get(s.ctx, path)
 	if err != nil {
 		return "", fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -164,14 +184,18 @@ func (a *StorageAdapter[K, V]) GetRootID() (string, error) {
 }
 
 // SetRootID sets the ID of the root node
-func (a *StorageAdapter[K, V]) SetRootID(id string) error {
-	path := a.prefix + MetadataPath + "/" + RootPath
+func (s *StorageAdapter[K, V]) SetRootID(id string) error {
+	// Lock the root
+	s.rootLock.Lock()
+	defer s.rootLock.Unlock()
+
+	path := s.prefix + MetadataPath + "/" + RootPath
 	entry := &logical.StorageEntry{
 		Key:   path,
 		Value: []byte(id),
 	}
 
-	if err := a.storage.Put(a.ctx, entry); err != nil {
+	if err := s.storage.Put(s.ctx, entry); err != nil {
 		return fmt.Errorf("failed to set root ID: %w", err)
 	}
 
