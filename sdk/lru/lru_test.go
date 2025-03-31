@@ -1,6 +1,7 @@
 package lru
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -91,6 +92,50 @@ func TestLRU(t *testing.T) {
 		val, ok := lru.Get(1)
 		if !ok || val != "one" {
 			t.Errorf("Expected (\"one\", true), got (%s, %t)", val, ok)
+		}
+	})
+
+	// Test concurrent access
+	t.Run("Concurrency", func(t *testing.T) {
+		lru, _ := NewLRU[string, int](100)
+		done := make(chan bool)
+		numGoroutines := 10
+		iterations := 100
+
+		// Launch multiple goroutines to read and write concurrently
+		for i := 0; i < numGoroutines; i++ {
+			go func(routineID int) {
+				for j := 0; j < iterations; j++ {
+					// Generate a key that this goroutine will work with
+					key := fmt.Sprintf("key-%d-%d", routineID, j)
+					value := routineID*iterations + j
+
+					// Write to cache
+					lru.Add(key, value)
+
+					// Read from cache
+					val, ok := lru.Get(key)
+					if !ok || val != value {
+						t.Errorf("Goroutine %d: Expected value %d for key %s, got %d (ok: %t)",
+							routineID, value, key, val, ok)
+					}
+
+					// Occasionally delete a key
+					if j%10 == 0 {
+						lru.Delete(key)
+						_, ok := lru.Get(key)
+						if ok {
+							t.Errorf("Goroutine %d: Key %s should have been deleted", routineID, key)
+						}
+					}
+				}
+				done <- true
+			}(i)
+		}
+
+		// Wait for all goroutines to complete
+		for i := 0; i < numGoroutines; i++ {
+			<-done
 		}
 	})
 }
