@@ -14,15 +14,15 @@ import (
 func TestStorageAdapter(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter, err := NewStorageAdapter[string, string](ctx, "bptree", s, nil, 100)
+	adapter, err := NewStorageAdapter[string, string]("bptree", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	// Test SetRootID and GetRootID
 	rootID := "root-1"
-	err = adapter.SetRootID(rootID)
+	err = adapter.SetRootID(ctx, rootID)
 	require.NoError(t, err, "Failed to set root ID")
 
-	retrievedRootID, err := adapter.GetRootID()
+	retrievedRootID, err := adapter.GetRootID(ctx)
 	require.NoError(t, err, "Failed to get root ID")
 
 	require.Equal(t, rootID, retrievedRootID, "Expected root ID %s, got %s", rootID, retrievedRootID)
@@ -34,11 +34,11 @@ func TestStorageAdapter(t *testing.T) {
 	node.Values = append(node.Values, "value1", "value2")
 
 	// Save the node
-	err = adapter.SaveNode(node)
+	err = adapter.SaveNode(ctx, node)
 	require.NoError(t, err, "Failed to save node")
 
 	// Load the node
-	loadedNode, err := adapter.LoadNode(nodeID)
+	loadedNode, err := adapter.LoadNode(ctx, nodeID)
 	require.NoError(t, err, "Failed to load node")
 	require.NotNil(t, loadedNode, "Loaded node is nil")
 
@@ -55,10 +55,10 @@ func TestStorageAdapter(t *testing.T) {
 	}
 
 	// Test DeleteNode
-	err = adapter.DeleteNode(nodeID)
+	err = adapter.DeleteNode(ctx, nodeID)
 	require.NoError(t, err, "Failed to delete node")
 
-	deletedNode, err := adapter.LoadNode(nodeID)
+	deletedNode, err := adapter.LoadNode(ctx, nodeID)
 	require.NoError(t, err, "Error when loading deleted node")
 
 	require.Nil(t, deletedNode, "Node should have been deleted")
@@ -68,7 +68,7 @@ func TestStorageAdapter(t *testing.T) {
 func TestStorageAdapterCache(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter, err := NewStorageAdapter[string, string](ctx, "bptree_cache", s, nil, 100)
+	adapter, err := NewStorageAdapter[string, string]("bptree_cache", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	t.Run("CacheHit", func(t *testing.T) {
@@ -77,11 +77,11 @@ func TestStorageAdapterCache(t *testing.T) {
 		node.Keys = []string{"key1"}
 		node.Values = []string{"value1"}
 
-		err := adapter.SaveNode(node)
+		err := adapter.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
 		// First load should come from storage
-		loadedNode, err := adapter.LoadNode(node.ID)
+		loadedNode, err := adapter.LoadNode(ctx, node.ID)
 		require.NoError(t, err, "Failed to load node")
 		require.Equal(t, node, loadedNode, "Loaded node should match original")
 
@@ -97,12 +97,12 @@ func TestStorageAdapterCache(t *testing.T) {
 		node.Keys = []string{"key1"}
 		node.Values = []string{"value1"}
 
-		err := adapter.SaveNode(node)
+		err := adapter.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
 		// Update the node
 		node.Values[0] = "value1_updated"
-		err = adapter.SaveNode(node)
+		err = adapter.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to update node")
 
 		// Verify the updated node is in cache
@@ -118,7 +118,7 @@ func TestStorageAdapterCache(t *testing.T) {
 			node.Keys = []string{fmt.Sprintf("key%d", i)}
 			node.Values = []string{fmt.Sprintf("value%d", i)}
 
-			err := adapter.SaveNode(node)
+			err := adapter.SaveNode(ctx, node)
 			require.NoError(t, err, "Failed to save node")
 		}
 
@@ -130,7 +130,7 @@ func TestStorageAdapterCache(t *testing.T) {
 
 		// Verify older nodes might have been evicted but are still retrievable
 		oldNode := NewLeafNode[string, string]("node-0")
-		loadedNode, err := adapter.LoadNode(oldNode.ID)
+		loadedNode, err := adapter.LoadNode(ctx, oldNode.ID)
 		require.NoError(t, err, "Failed to load old node")
 		require.Equal(t, oldNode.ID, loadedNode.ID, "Loaded node should match old node")
 	})
@@ -141,7 +141,7 @@ func TestStorageAdapterCache(t *testing.T) {
 		node.Keys = []string{"key1"}
 		node.Values = []string{"value1"}
 
-		err := adapter.SaveNode(node)
+		err := adapter.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
 		// Verify node is in cache
@@ -150,7 +150,7 @@ func TestStorageAdapterCache(t *testing.T) {
 		require.Equal(t, node, cachedNode, "Cached node should match original")
 
 		// Delete the node
-		err = adapter.DeleteNode(node.ID)
+		err = adapter.DeleteNode(ctx, node.ID)
 		require.NoError(t, err, "Failed to delete node")
 
 		// Verify node is removed from cache
@@ -158,21 +158,22 @@ func TestStorageAdapterCache(t *testing.T) {
 		require.False(t, ok, "Deleted node should not be in cache")
 	})
 
+	// TODO (gabrielopesantos): Fix test
 	// t.Run("CacheConcurrentAccess", func(t *testing.T) {
 	// 	// Create and save a node
 	// 	node := NewLeafNode[string, string]("node-4")
 	// 	node.Keys = []string{"key1"}
 	// 	node.Values = []string{"value1"}
 
-	// 	err := adapter.SaveNode(node)
+	// 	err := adapter.SaveNode(ctx, node)
 	// 	require.NoError(t, err, "Failed to save node")
 
 	// 	// Launch multiple goroutines to read and write concurrently
-	// 	done := make(chan bool)
+	// 	done := make(chan bool, 10)
 	// 	for i := 0; i < 10; i++ {
 	// 		go func(i int) {
 	// 			// Read existing node
-	// 			loadedNode, err := adapter.LoadNode(node.ID)
+	// 			loadedNode, err := adapter.LoadNode(ctx, node.ID)
 	// 			require.NoError(t, err, "Failed to load node")
 	// 			require.Equal(t, node, loadedNode, "Loaded node should match original")
 
@@ -181,7 +182,7 @@ func TestStorageAdapterCache(t *testing.T) {
 	// 			newNode.Keys = []string{fmt.Sprintf("key%d", i)}
 	// 			newNode.Values = []string{fmt.Sprintf("value%d", i)}
 
-	// 			err = adapter.SaveNode(newNode)
+	// 			err = adapter.SaveNode(ctx, newNode)
 	// 			require.NoError(t, err, "Failed to save new node")
 
 	// 			// Verify new node is in cache

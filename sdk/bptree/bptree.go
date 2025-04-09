@@ -1,12 +1,11 @@
 package bptree
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"sync"
-
-	"github.com/hashicorp/go-uuid"
 )
 
 // DefaultOrder is the default maximum number of children per B+ tree node
@@ -24,7 +23,7 @@ type BPlusTree[K comparable, V any] struct {
 }
 
 // NewBPlusTree creates a new B+ tree with the specified order and comparison function
-func NewBPlusTree[K comparable, V any](order int, less func(a, b K) bool, storage NodeStorage[K, V]) (*BPlusTree[K, V], error) {
+func NewBPlusTree[K comparable, V any](ctx context.Context, order int, less func(a, b K) bool, storage NodeStorage[K, V]) (*BPlusTree[K, V], error) {
 	if order < 2 {
 		return nil, fmt.Errorf("order must be at least 2, got %d", order)
 	}
@@ -40,7 +39,7 @@ func NewBPlusTree[K comparable, V any](order int, less func(a, b K) bool, storag
 	}
 
 	// Initialize the tree with a root node
-	rootID, err := storage.GetRootID()
+	rootID, err := storage.GetRootID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -50,12 +49,12 @@ func NewBPlusTree[K comparable, V any](order int, less func(a, b K) bool, storag
 		rootNode := NewLeafNode[K, V](genUuid())
 
 		// Save the root node
-		if err := storage.SaveNode(rootNode); err != nil {
+		if err := storage.SaveNode(ctx, rootNode); err != nil {
 			return nil, fmt.Errorf("failed to save root node: %w", err)
 		}
 
 		// Set the root ID
-		if err := storage.SetRootID(rootNode.ID); err != nil {
+		if err := storage.SetRootID(ctx, rootNode.ID); err != nil {
 			return nil, fmt.Errorf("failed to set root ID: %w", err)
 		}
 	}
@@ -64,15 +63,15 @@ func NewBPlusTree[K comparable, V any](order int, less func(a, b K) bool, storag
 }
 
 // getRoot loads the root node from storage
-func (t *BPlusTree[K, V]) getRoot() (*Node[K, V], error) {
-	rootID, err := t.storage.GetRootID()
+func (t *BPlusTree[K, V]) getRoot(ctx context.Context) (*Node[K, V], error) {
+	rootID, err := t.storage.GetRootID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root ID: %w", err)
 	}
 	if rootID == "" {
 		return nil, errors.New("root node not found")
 	}
-	return t.loadNode(rootID)
+	return t.loadNode(ctx, rootID)
 }
 
 // minKeys returns the minimum number of keys a node must have
@@ -96,15 +95,15 @@ func (t *BPlusTree[K, V]) isUnderfull(node *Node[K, V]) bool {
 }
 
 // Get retrieves a value by key
-func (t *BPlusTree[K, V]) Get(key K) (V, bool, error) {
+func (t *BPlusTree[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
-	return t.get(key)
+	return t.get(ctx, key)
 }
 
-func (t *BPlusTree[K, V]) get(key K) (V, bool, error) {
+func (t *BPlusTree[K, V]) get(ctx context.Context, key K) (V, bool, error) {
 	var zero V
-	leaf, err := t.findLeafNode(key)
+	leaf, err := t.findLeafNode(ctx, key)
 	if err != nil {
 		return zero, false, fmt.Errorf("failed to find leaf node: %w", err)
 	}
@@ -120,35 +119,35 @@ func (t *BPlusTree[K, V]) get(key K) (V, bool, error) {
 }
 
 // Insert inserts a key-value pair
-func (t *BPlusTree[K, V]) Insert(key K, value V) error {
+func (t *BPlusTree[K, V]) Insert(ctx context.Context, key K, value V) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	leaf, err := t.findLeafNode(key)
+	leaf, err := t.findLeafNode(ctx, key)
 	if err != nil {
 		return err
 	}
 
-	err = t.insertIntoLeaf(leaf, key, value)
+	err = t.insertIntoLeaf(ctx, leaf, key, value)
 	if err != nil {
 		return err
 	}
 
 	// If the leaf is overfull, we need to split it
 	if t.isOverfull(leaf) {
-		newLeaf, splitKey := t.splitLeafNode(leaf)
+		newLeaf, splitKey := t.splitLeafNode(ctx, leaf)
 		// Save both leaf nodes after splitting
-		if err := t.storage.SaveNode(leaf); err != nil {
+		if err := t.storage.SaveNode(ctx, leaf); err != nil {
 			return fmt.Errorf("failed to save original leaf node: %w", err)
 		}
-		if err := t.storage.SaveNode(newLeaf); err != nil {
+		if err := t.storage.SaveNode(ctx, newLeaf); err != nil {
 			return fmt.Errorf("failed to save new leaf node: %w", err)
 		}
-		return t.insertIntoParent(leaf, newLeaf, splitKey)
+		return t.insertIntoParent(ctx, leaf, newLeaf, splitKey)
 	}
 
 	// Save the leaf node after insertion
-	if err := t.storage.SaveNode(leaf); err != nil {
+	if err := t.storage.SaveNode(ctx, leaf); err != nil {
 		return fmt.Errorf("failed to save leaf node: %w", err)
 	}
 
@@ -156,11 +155,11 @@ func (t *BPlusTree[K, V]) Insert(key K, value V) error {
 }
 
 // Delete removes a key-value pair
-func (t *BPlusTree[K, V]) Delete(key K) error {
+func (t *BPlusTree[K, V]) Delete(ctx context.Context, key K) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	leaf, err := t.findLeafNode(key)
+	leaf, err := t.findLeafNode(ctx, key)
 	if err != nil {
 		return err
 	}
@@ -175,7 +174,7 @@ func (t *BPlusTree[K, V]) Delete(key K) error {
 	leaf.removeKeyValue(idx)
 
 	// Save the leaf node after deletion
-	if err := t.storage.SaveNode(leaf); err != nil {
+	if err := t.storage.SaveNode(ctx, leaf); err != nil {
 		return fmt.Errorf("failed to save leaf node: %w", err)
 	}
 
@@ -185,8 +184,8 @@ func (t *BPlusTree[K, V]) Delete(key K) error {
 }
 
 // findLeafNode finds the leaf node where a key belongs
-func (t *BPlusTree[K, V]) findLeafNode(key K) (*Node[K, V], error) {
-	node, err := t.getRoot()
+func (t *BPlusTree[K, V]) findLeafNode(ctx context.Context, key K) (*Node[K, V], error) {
+	node, err := t.getRoot(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +196,7 @@ func (t *BPlusTree[K, V]) findLeafNode(key K) (*Node[K, V], error) {
 			// If search key is less than current key, go left
 			if t.less(key, k) {
 				var err error
-				node, err = t.loadNode(node.ChildrenIDs[i])
+				node, err = t.loadNode(ctx, node.ChildrenIDs[i])
 				if err != nil {
 					return nil, err
 				}
@@ -208,7 +207,7 @@ func (t *BPlusTree[K, V]) findLeafNode(key K) (*Node[K, V], error) {
 		// If we didn't find a key greater than search key, go right
 		if !found {
 			var err error
-			node, err = t.loadNode(node.ChildrenIDs[len(node.ChildrenIDs)-1])
+			node, err = t.loadNode(ctx, node.ChildrenIDs[len(node.ChildrenIDs)-1])
 			if err != nil {
 				return nil, err
 			}
@@ -217,7 +216,7 @@ func (t *BPlusTree[K, V]) findLeafNode(key K) (*Node[K, V], error) {
 	return node, nil
 }
 
-func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
+func (t *BPlusTree[K, V]) splitLeafNode(ctx context.Context, leaf *Node[K, V]) (*Node[K, V], K) {
 	// Create a new leaf node
 	newLeaf := NewLeafNode[K, V](genUuid())
 
@@ -237,16 +236,16 @@ func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
 	return newLeaf, newLeaf.Keys[0]
 }
 
-func (t *BPlusTree[K, V]) insertIntoLeaf(leaf *Node[K, V], key K, value V) error {
+func (t *BPlusTree[K, V]) insertIntoLeaf(ctx context.Context, leaf *Node[K, V], key K, value V) error {
 	idx, _ := leaf.findKeyIndex(key, t.less)
 	leaf.insertKeyValue(idx, key, value)
 	return nil
 }
 
 // insertIntoParent inserts a key and right node into the parent of left node
-func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], rightNode *Node[K, V], splitKey K) error {
+func (t *BPlusTree[K, V]) insertIntoParent(ctx context.Context, leftNode *Node[K, V], rightNode *Node[K, V], splitKey K) error {
 	// If leftNode is the root, create a new root
-	rootID, err := t.storage.GetRootID()
+	rootID, err := t.storage.GetRootID(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -260,22 +259,22 @@ func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], rightNode *Node
 		rightNode.ParentID = newRoot.ID
 
 		// Save all nodes with updated parent references
-		if err := t.saveNode(leftNode); err != nil {
+		if err := t.saveNode(ctx, leftNode); err != nil {
 			return fmt.Errorf("failed to save left node: %w", err)
 		}
-		if err := t.saveNode(rightNode); err != nil {
+		if err := t.saveNode(ctx, rightNode); err != nil {
 			return fmt.Errorf("failed to save right node: %w", err)
 		}
-		if err := t.saveNode(newRoot); err != nil {
+		if err := t.saveNode(ctx, newRoot); err != nil {
 			return fmt.Errorf("failed to save new root: %w", err)
 		}
 
 		// Update root ID in storage
-		return t.storage.SetRootID(newRoot.ID)
+		return t.storage.SetRootID(ctx, newRoot.ID)
 	}
 
 	// Load parent node
-	parent, err := t.loadNode(leftNode.ParentID)
+	parent, err := t.loadNode(ctx, leftNode.ParentID)
 	if err != nil {
 		return err
 	}
@@ -290,33 +289,33 @@ func (t *BPlusTree[K, V]) insertIntoParent(leftNode *Node[K, V], rightNode *Node
 	rightNode.ParentID = parent.ID
 
 	// Save the updated nodes
-	if err := t.saveNode(leftNode); err != nil {
+	if err := t.saveNode(ctx, leftNode); err != nil {
 		return fmt.Errorf("failed to save left node: %w", err)
 	}
-	if err := t.saveNode(rightNode); err != nil {
+	if err := t.saveNode(ctx, rightNode); err != nil {
 		return fmt.Errorf("failed to save right node: %w", err)
 	}
-	if err := t.saveNode(parent); err != nil {
+	if err := t.saveNode(ctx, parent); err != nil {
 		return fmt.Errorf("failed to save parent node: %w", err)
 	}
 
 	// If the internal node is overfull, we need to split it
 	if t.isOverfull(parent) {
-		newInternal, splitKey := t.splitInternalNode(parent)
+		newInternal, splitKey := t.splitInternalNode(ctx, parent)
 		// Save both internal nodes after splitting
-		if err := t.saveNode(parent); err != nil {
+		if err := t.saveNode(ctx, parent); err != nil {
 			return fmt.Errorf("failed to save original internal node: %w", err)
 		}
-		if err := t.saveNode(newInternal); err != nil {
+		if err := t.saveNode(ctx, newInternal); err != nil {
 			return fmt.Errorf("failed to save new internal node: %w", err)
 		}
-		return t.insertIntoParent(parent, newInternal, splitKey)
+		return t.insertIntoParent(ctx, parent, newInternal, splitKey)
 	}
 
 	return nil
 }
 
-func (t *BPlusTree[K, V]) splitInternalNode(node *Node[K, V]) (*Node[K, V], K) {
+func (t *BPlusTree[K, V]) splitInternalNode(ctx context.Context, node *Node[K, V]) (*Node[K, V], K) {
 	// Create a new internal node
 	newInternal := NewInternalNode[K, V](genUuid())
 
@@ -337,13 +336,13 @@ func (t *BPlusTree[K, V]) splitInternalNode(node *Node[K, V]) (*Node[K, V], K) {
 
 	// Update parent references of newInternal's children
 	for _, childID := range newInternal.ChildrenIDs {
-		child, err := t.loadNode(childID)
+		child, err := t.loadNode(ctx, childID)
 		if err != nil {
 			// Log error but continue since we can't fail here
 			continue
 		}
 		child.ParentID = newInternal.ID
-		if err := t.saveNode(child); err != nil {
+		if err := t.saveNode(ctx, child); err != nil {
 			// Log error but continue since we can't fail here
 			continue
 		}
@@ -352,18 +351,9 @@ func (t *BPlusTree[K, V]) splitInternalNode(node *Node[K, V]) (*Node[K, V], K) {
 	return newInternal, newSplitKey
 }
 
-// TODO: Move to a better place and review if we need this
-func genUuid() string {
-	aUuid, err := uuid.GenerateUUID()
-	if err != nil {
-		panic(err)
-	}
-	return aUuid
-}
-
 // Print prints a visual representation of the B+ tree
 func (t *BPlusTree[K, V]) Print() error {
-	root, err := t.getRoot()
+	root, err := t.getRoot(context.Background())
 	if err != nil {
 		return err
 	}
@@ -386,7 +376,7 @@ func (t *BPlusTree[K, V]) printNode(node *Node[K, V], prefix string, isLast bool
 	// Print children for internal nodes
 	if !node.IsLeaf {
 		for i, childID := range node.ChildrenIDs {
-			child, err := t.loadNode(childID)
+			child, err := t.loadNode(context.Background(), childID)
 			if err != nil {
 				return fmt.Errorf("failed to load child node %s: %w", childID, err)
 			}
@@ -421,11 +411,11 @@ func getPrefix(isLast bool) string {
 }
 
 // loadNode loads a node from storage
-func (t *BPlusTree[K, V]) loadNode(id string) (*Node[K, V], error) {
-	return t.storage.LoadNode(id)
+func (t *BPlusTree[K, V]) loadNode(ctx context.Context, id string) (*Node[K, V], error) {
+	return t.storage.LoadNode(ctx, id)
 }
 
 // saveNode saves a node to storage
-func (t *BPlusTree[K, V]) saveNode(node *Node[K, V]) error {
-	return t.storage.SaveNode(node)
+func (t *BPlusTree[K, V]) saveNode(ctx context.Context, node *Node[K, V]) error {
+	return t.storage.SaveNode(ctx, node)
 }

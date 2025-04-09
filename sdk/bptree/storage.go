@@ -13,15 +13,15 @@ import (
 
 type NodeStorage[K comparable, V any] interface {
 	// LoadNode loads a node from storage
-	LoadNode(id string) (*Node[K, V], error)
+	LoadNode(ctx context.Context, id string) (*Node[K, V], error)
 	// SaveNode saves a node to storage
-	SaveNode(node *Node[K, V]) error
+	SaveNode(ctx context.Context, node *Node[K, V]) error
 	// DeleteNode deletes a node from storage
-	DeleteNode(id string) error
+	DeleteNode(ctx context.Context, id string) error
 	// GetRootID gets the ID of the root node
-	GetRootID() (string, error)
+	GetRootID(ctx context.Context) (string, error)
 	// SetRootID sets the ID of the root node
-	SetRootID(id string) error
+	SetRootID(ctx context.Context, id string) error
 }
 
 const (
@@ -33,7 +33,6 @@ const (
 
 // StorageAdapter adapts the logical.Storage interface to the NodeStorage interface
 type StorageAdapter[K comparable, V any] struct {
-	ctx        context.Context
 	prefix     string
 	storage    logical.Storage
 	serializer NodeSerializer[K, V]
@@ -67,7 +66,6 @@ func (s *JSONSerializer[K, V]) Deserialize(data []byte) (*Node[K, V], error) {
 
 // NewStorageAdapter creates a new adapter for the logical.Storage interface
 func NewStorageAdapter[K comparable, V any](
-	ctx context.Context,
 	prefix string,
 	storage logical.Storage,
 	serializer NodeSerializer[K, V],
@@ -87,7 +85,6 @@ func NewStorageAdapter[K comparable, V any](
 	}
 
 	return &StorageAdapter[K, V]{
-		ctx:        ctx,
 		prefix:     prefix,
 		storage:    storage,
 		serializer: serializer,
@@ -96,7 +93,7 @@ func NewStorageAdapter[K comparable, V any](
 }
 
 // LoadNode loads a node from storage
-func (s *StorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
+func (s *StorageAdapter[K, V]) LoadNode(ctx context.Context, id string) (*Node[K, V], error) {
 	// Lock the nodes
 	s.nodesLock.RLock()
 	defer s.nodesLock.RUnlock()
@@ -108,7 +105,7 @@ func (s *StorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
 
 	// Load from storage
 	path := s.prefix + NodePath + "/" + id
-	entry, err := s.storage.Get(s.ctx, path)
+	entry, err := s.storage.Get(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load node %s: %w", id, err)
 	}
@@ -129,7 +126,7 @@ func (s *StorageAdapter[K, V]) LoadNode(id string) (*Node[K, V], error) {
 }
 
 // SaveNode saves a node to storage
-func (s *StorageAdapter[K, V]) SaveNode(node *Node[K, V]) error {
+func (s *StorageAdapter[K, V]) SaveNode(ctx context.Context, node *Node[K, V]) error {
 	// Check if the node is nil
 	if node == nil {
 		return fmt.Errorf("cannot save nil node")
@@ -150,7 +147,7 @@ func (s *StorageAdapter[K, V]) SaveNode(node *Node[K, V]) error {
 		Value: data,
 	}
 
-	if err := s.storage.Put(s.ctx, entry); err != nil {
+	if err := s.storage.Put(ctx, entry); err != nil {
 		return fmt.Errorf("failed to save node %s: %w", node.ID, err)
 	}
 
@@ -161,13 +158,13 @@ func (s *StorageAdapter[K, V]) SaveNode(node *Node[K, V]) error {
 }
 
 // DeleteNode deletes a node from storage
-func (s *StorageAdapter[K, V]) DeleteNode(id string) error {
+func (s *StorageAdapter[K, V]) DeleteNode(ctx context.Context, id string) error {
 	// Lock the nodes
 	s.nodesLock.Lock()
 	defer s.nodesLock.Unlock()
 
 	path := s.prefix + NodePath + "/" + id
-	if err := s.storage.Delete(s.ctx, path); err != nil {
+	if err := s.storage.Delete(ctx, path); err != nil {
 		return fmt.Errorf("failed to delete node %s: %w", id, err)
 	}
 
@@ -178,13 +175,13 @@ func (s *StorageAdapter[K, V]) DeleteNode(id string) error {
 }
 
 // GetRootID gets the ID of the root node
-func (s *StorageAdapter[K, V]) GetRootID() (string, error) {
+func (s *StorageAdapter[K, V]) GetRootID(ctx context.Context) (string, error) {
 	// Lock the root
 	s.rootLock.RLock()
 	defer s.rootLock.RUnlock()
 
 	path := s.prefix + MetadataPath + "/" + RootPath
-	entry, err := s.storage.Get(s.ctx, path)
+	entry, err := s.storage.Get(ctx, path)
 	if err != nil {
 		return "", fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -197,7 +194,7 @@ func (s *StorageAdapter[K, V]) GetRootID() (string, error) {
 }
 
 // SetRootID sets the ID of the root node
-func (s *StorageAdapter[K, V]) SetRootID(id string) error {
+func (s *StorageAdapter[K, V]) SetRootID(ctx context.Context, id string) error {
 	// Lock the root
 	s.rootLock.Lock()
 	defer s.rootLock.Unlock()
@@ -208,7 +205,7 @@ func (s *StorageAdapter[K, V]) SetRootID(id string) error {
 		Value: []byte(id),
 	}
 
-	if err := s.storage.Put(s.ctx, entry); err != nil {
+	if err := s.storage.Put(ctx, entry); err != nil {
 		return fmt.Errorf("failed to set root ID: %w", err)
 	}
 

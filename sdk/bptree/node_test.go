@@ -270,7 +270,7 @@ func TestRemoveChild(t *testing.T) {
 func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter, err := NewStorageAdapter[string, string](ctx, "bptree", s, nil, 100)
+	adapter, err := NewStorageAdapter[string, string]("bptree", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	// Test SaveNode and LoadNode
@@ -285,11 +285,11 @@ func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	internal.insertChild(0, leaf.ID)
 
 	// Save the leaf node (saved after being added to the internal node otherwise there is no reference to parent on it)
-	err = adapter.SaveNode(leaf)
+	err = adapter.SaveNode(ctx, leaf)
 	require.NoError(t, err, "Failed to save node")
 
 	// Load the node
-	loadedLeaf, err := adapter.LoadNode(leafID)
+	loadedLeaf, err := adapter.LoadNode(ctx, leafID)
 	require.NoError(t, err, "Failed to load node")
 	require.NotNil(t, loadedLeaf, "Loaded node is nil")
 
@@ -298,11 +298,11 @@ func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	require.Equal(t, leaf.Values, loadedLeaf.Values, "Expected node values %v, got %v", leaf.Values, loadedLeaf.Values)
 
 	// Save the internal node
-	err = adapter.SaveNode(internal)
+	err = adapter.SaveNode(ctx, internal)
 	require.NoError(t, err, "Failed to save internal node")
 
 	// Load the internal node and check that keys are set but references not
-	loadedInternal, err := adapter.LoadNode(internalID)
+	loadedInternal, err := adapter.LoadNode(ctx, internalID)
 	require.NoError(t, err, "Failed to load internal node")
 	require.NotNil(t, loadedInternal, "Loaded internal node is nil")
 
