@@ -128,14 +128,14 @@ func (t *BPlusTree[K, V]) Insert(ctx context.Context, key K, value V) error {
 		return err
 	}
 
-	err = t.insertIntoLeaf(ctx, leaf, key, value)
+	err = t.insertIntoLeaf(leaf, key, value)
 	if err != nil {
 		return err
 	}
 
 	// If the leaf is overfull, we need to split it
 	if t.isOverfull(leaf) {
-		newLeaf, splitKey := t.splitLeafNode(ctx, leaf)
+		newLeaf, splitKey := t.splitLeafNode(leaf)
 		// Save both leaf nodes after splitting
 		if err := t.storage.SaveNode(ctx, leaf); err != nil {
 			return fmt.Errorf("failed to save original leaf node: %w", err)
@@ -216,7 +216,7 @@ func (t *BPlusTree[K, V]) findLeafNode(ctx context.Context, key K) (*Node[K, V],
 	return node, nil
 }
 
-func (t *BPlusTree[K, V]) splitLeafNode(ctx context.Context, leaf *Node[K, V]) (*Node[K, V], K) {
+func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
 	// Create a new leaf node
 	newLeaf := NewLeafNode[K, V](genUuid())
 
@@ -236,7 +236,7 @@ func (t *BPlusTree[K, V]) splitLeafNode(ctx context.Context, leaf *Node[K, V]) (
 	return newLeaf, newLeaf.Keys[0]
 }
 
-func (t *BPlusTree[K, V]) insertIntoLeaf(ctx context.Context, leaf *Node[K, V], key K, value V) error {
+func (t *BPlusTree[K, V]) insertIntoLeaf(leaf *Node[K, V], key K, value V) error {
 	idx, _ := leaf.findKeyIndex(key, t.less)
 	leaf.insertKeyValue(idx, key, value)
 	return nil
@@ -358,11 +358,11 @@ func (t *BPlusTree[K, V]) Print() error {
 		return err
 	}
 
-	return t.printNode(root, "", true, true)
+	return t.printNode(root, "", true)
 }
 
 // printNode recursively prints a node and its children
-func (t *BPlusTree[K, V]) printNode(node *Node[K, V], prefix string, isLast bool, isRoot bool) error {
+func (t *BPlusTree[K, V]) printNode(node *Node[K, V], prefix string, isLast bool) error {
 	// Print the current node
 	if node.IsLeaf {
 		log.Printf("%s%s Leaf Node (ID: %s)\n", prefix, getPrefix(isLast), node.ID)
@@ -393,7 +393,7 @@ func (t *BPlusTree[K, V]) printNode(node *Node[K, V], prefix string, isLast bool
 			}
 
 			// Recursively print the child
-			if err := t.printNode(child, nextPrefix, isLastChild, false); err != nil {
+			if err := t.printNode(child, nextPrefix, isLastChild); err != nil {
 				return err
 			}
 		}
