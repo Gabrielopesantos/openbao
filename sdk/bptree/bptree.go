@@ -419,3 +419,8 @@ func (t *BPlusTree[K, V]) loadNode(ctx context.Context, id string) (*Node[K, V],
 func (t *BPlusTree[K, V]) saveNode(ctx context.Context, node *Node[K, V]) error {
 	return t.storage.SaveNode(ctx, node)
 }
+
+// WithTransaction wraps the storage in a transaction
+func (t *BPlusTree[K, V]) WithTransaction(ctx context.Context, fn func() error) error {
+	return t.storage.WithTransaction(ctx, fn)
+}

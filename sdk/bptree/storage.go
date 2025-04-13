@@ -22,6 +22,8 @@ type NodeStorage[K comparable, V any] interface {
 	GetRootID(ctx context.Context) (string, error)
 	// SetRootID sets the ID of the root node
 	SetRootID(ctx context.Context, id string) error
+	// WithTransaction wraps the storage in a transaction
+	WithTransaction(ctx context.Context, fn func() error) error
 }
 
 const (
@@ -210,4 +212,10 @@ func (s *StorageAdapter[K, V]) SetRootID(ctx context.Context, id string) error {
 	}
 
 	return nil
+}
+
+func (s *StorageAdapter[K, V]) WithTransaction(ctx context.Context, fn func() error) error {
+	return logical.WithTransaction(ctx, s.storage, func(tx logical.Storage) error {
+		return fn()
+	})
 }
