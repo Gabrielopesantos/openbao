@@ -14,6 +14,9 @@ const DefaultOrder = 32
 // ErrKeyNotFound is returned when a key is not found in the tree
 var ErrKeyNotFound = errors.New("key not found")
 
+// ErrValueNotFound is returned when a value is not found in the tree
+var ErrValueNotFound = errors.New("value not found")
+
 // BPlusTree represents a B+ tree data structure
 type BPlusTree[K comparable, V any] struct {
 	order   int
@@ -94,18 +97,17 @@ func (t *BPlusTree[K, V]) isUnderfull(node *Node[K, V]) bool {
 	return len(node.Keys) < t.minKeys()
 }
 
-// Get retrieves a value by key
-func (t *BPlusTree[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
+// Get retrieves all values for a key
+func (t *BPlusTree[K, V]) Get(ctx context.Context, key K) ([]V, bool, error) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 	return t.get(ctx, key)
 }
 
-func (t *BPlusTree[K, V]) get(ctx context.Context, key K) (V, bool, error) {
-	var zero V
+func (t *BPlusTree[K, V]) get(ctx context.Context, key K) ([]V, bool, error) {
 	leaf, err := t.findLeafNode(ctx, key)
 	if err != nil {
-		return zero, false, fmt.Errorf("failed to find leaf node: %w", err)
+		return nil, false, fmt.Errorf("failed to find leaf node: %w", err)
 	}
 
 	// If we get here, we are at a leaf node
@@ -115,7 +117,7 @@ func (t *BPlusTree[K, V]) get(ctx context.Context, key K) (V, bool, error) {
 	}
 
 	// Key not found is a valid state, not an error
-	return zero, false, nil
+	return nil, false, nil
 }
 
 // Insert inserts a key-value pair
@@ -183,6 +185,57 @@ func (t *BPlusTree[K, V]) Delete(ctx context.Context, key K) error {
 	return nil
 }
 
+// DeleteValue removes a specific value for a key
+func (t *BPlusTree[K, V]) DeleteValue(ctx context.Context, key K, value V) error {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	leaf, err := t.findLeafNode(ctx, key)
+	if err != nil {
+		return err
+	}
+
+	// Check if the key exists in the leaf node
+	idx, found := leaf.findKeyIndex(key, t.less)
+	if !found {
+		return ErrKeyNotFound
+	}
+
+	// Find the value in the slice of values
+	values := leaf.Values[idx]
+	for i, v := range values {
+		// Since we can't directly compare values of type V, we'll use a simple approach
+		// In a real implementation, you might want to use reflection or a custom equality function
+		// For now, we'll assume the values are comparable
+		if fmt.Sprintf("%v", v) == fmt.Sprintf("%v", value) {
+			// Remove the value from the slice
+			values = append(values[:i], values[i+1:]...)
+			if len(values) == 0 {
+				// If no values left, remove the key
+				leaf.removeKeyValue(idx)
+			} else {
+				// Otherwise, update the values
+				leaf.Values[idx] = values
+			}
+
+			// Save the leaf node after deletion
+			if err := t.storage.SaveNode(ctx, leaf); err != nil {
+				return fmt.Errorf("failed to save leaf node: %w", err)
+			}
+
+			return nil
+		}
+	}
+
+	// Value not found
+	return ErrValueNotFound
+}
+
+// DeleteAll removes all values for a key
+func (t *BPlusTree[K, V]) DeleteAll(ctx context.Context, key K) error {
+	return t.Delete(ctx, key)
+}
+
 // findLeafNode finds the leaf node where a key belongs
 func (t *BPlusTree[K, V]) findLeafNode(ctx context.Context, key K) (*Node[K, V], error) {
 	node, err := t.getRoot(ctx)
@@ -237,8 +290,7 @@ func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
 }
 
 func (t *BPlusTree[K, V]) insertIntoLeaf(leaf *Node[K, V], key K, value V) error {
-	idx, _ := leaf.findKeyIndex(key, t.less)
-	leaf.insertKeyValue(idx, key, value)
+	leaf.insertKeyValue(key, value, t.less)
 	return nil
 }
 

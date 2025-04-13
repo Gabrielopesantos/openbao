@@ -31,7 +31,7 @@ func TestStorageAdapter(t *testing.T) {
 	nodeID := "node-1"
 	node := NewLeafNode[string, string](nodeID)
 	node.Keys = append(node.Keys, "key1", "key2")
-	node.Values = append(node.Values, "value1", "value2")
+	node.Values = append(node.Values, []string{"value1", "value2"})
 
 	// Save the node
 	err = adapter.SaveNode(ctx, node)
@@ -75,7 +75,7 @@ func TestStorageAdapterCache(t *testing.T) {
 		// Create and save a node
 		node := NewLeafNode[string, string]("node-1")
 		node.Keys = []string{"key1"}
-		node.Values = []string{"value1"}
+		node.Values = [][]string{{"value1"}}
 
 		err := adapter.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
@@ -95,13 +95,13 @@ func TestStorageAdapterCache(t *testing.T) {
 		// Create and save a node
 		node := NewLeafNode[string, string]("node-2")
 		node.Keys = []string{"key1"}
-		node.Values = []string{"value1"}
+		node.Values = [][]string{{"value1"}}
 
 		err := adapter.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
 		// Update the node
-		node.Values[0] = "value1_updated"
+		node.Values[0] = []string{"value1_updated"}
 		err = adapter.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to update node")
 
@@ -116,7 +116,7 @@ func TestStorageAdapterCache(t *testing.T) {
 		for i := 0; i < 150; i++ {
 			node := NewLeafNode[string, string](fmt.Sprintf("node-%d", i))
 			node.Keys = []string{fmt.Sprintf("key%d", i)}
-			node.Values = []string{fmt.Sprintf("value%d", i)}
+			node.Values = [][]string{{fmt.Sprintf("value%d", i)}}
 
 			err := adapter.SaveNode(ctx, node)
 			require.NoError(t, err, "Failed to save node")
@@ -139,7 +139,7 @@ func TestStorageAdapterCache(t *testing.T) {
 		// Create and save a node
 		node := NewLeafNode[string, string]("node-3")
 		node.Keys = []string{"key1"}
-		node.Values = []string{"value1"}
+		node.Values = [][]string{{"value1"}}
 
 		err := adapter.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")

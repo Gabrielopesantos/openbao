@@ -5,7 +5,7 @@ type Node[K comparable, V any] struct {
 	ID          string   `json:"id"`
 	IsLeaf      bool     `json:"isLeaf"`
 	Keys        []K      `json:"keys"`
-	Values      []V      `json:"values"`
+	Values      [][]V    `json:"values"`
 	ChildrenIDs []string `json:"childrenIDs"`
 	ParentID    string   `json:"parentID"`
 	NextID      string   `json:"nextID"` // ID of the next leaf node
@@ -16,14 +16,18 @@ func NewLeafNode[K comparable, V any](id string) *Node[K, V] {
 	return &Node[K, V]{
 		ID:     id,
 		IsLeaf: true,
+		Keys:   make([]K, 0),
+		Values: make([][]V, 0),
 	}
 }
 
 // NewInternalNode creates a new internal node
 func NewInternalNode[K comparable, V any](id string) *Node[K, V] {
 	return &Node[K, V]{
-		ID:     id,
-		IsLeaf: false,
+		ID:          id,
+		IsLeaf:      false,
+		Keys:        make([]K, 0),
+		ChildrenIDs: make([]string, 0),
 	}
 }
 
@@ -58,14 +62,28 @@ func (n *Node[K, V]) insertKey(idx int, key K) {
 }
 
 // insertKeyValue inserts a key-value pair at the specified index (for leaf nodes only)
-func (n *Node[K, V]) insertKeyValue(idx int, key K, value V) {
+func (n *Node[K, V]) insertKeyValue(key K, value V, less func(a, b K) bool) {
 	if n.IsLeaf {
-		n.insertKey(idx, key)
-		// Handle values array separately since it's only for leaf nodes
-		n.Values = append(n.Values, value)
+		// Key index is the index where the key should be inserted
+		idx, found := n.findKeyIndex(key, less)
+		if !found {
+			// Insert the key if it doesn't exist
+			n.insertKey(idx, key)
+		}
+
+		// If we're inserting at an existing key, append to its values
+		if found {
+			n.Values[idx] = append(n.Values[idx], value)
+			return
+		}
+
+		// Otherwise, create a new slice for this key
+		n.Values = append(n.Values, []V{value})
+
+		// If we're not appending to the end, shift elements to make room
 		if idx < len(n.Values)-1 {
 			copy(n.Values[idx+1:], n.Values[idx:len(n.Values)-1])
-			n.Values[idx] = value
+			n.Values[idx] = []V{value}
 		}
 	}
 }
