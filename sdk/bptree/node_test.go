@@ -38,8 +38,11 @@ func TestFindKeyIndex(t *testing.T) {
 
 	t.Run("KeyFound", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{1, 3, 5, 7, 9}
-		node.Values = [][]string{{"one"}, {"three"}, {"five"}, {"seven"}, {"nine"}}
+		node.insertKeyValue(1, "one", intLess, stringEqual)
+		node.insertKeyValue(3, "three", intLess, stringEqual)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
+		node.insertKeyValue(7, "seven", intLess, stringEqual)
+		node.insertKeyValue(9, "nine", intLess, stringEqual)
 
 		idx, found := node.findKeyIndex(5, intLess)
 		require.True(t, found)
@@ -48,8 +51,11 @@ func TestFindKeyIndex(t *testing.T) {
 
 	t.Run("KeyNotFound", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{1, 3, 5, 7, 9}
-		node.Values = [][]string{{"one"}, {"three"}, {"five"}, {"seven"}, {"nine"}}
+		node.insertKeyValue(1, "one", intLess, stringEqual)
+		node.insertKeyValue(3, "three", intLess, stringEqual)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
+		node.insertKeyValue(7, "seven", intLess, stringEqual)
+		node.insertKeyValue(9, "nine", intLess, stringEqual)
 
 		// Test insertion point for various values
 		tests := []struct {
@@ -73,8 +79,11 @@ func TestFindKeyIndex(t *testing.T) {
 
 	t.Run("StringKeys", func(t *testing.T) {
 		node := NewLeafNode[string, int]("leaf")
-		node.Keys = []string{"a", "c", "e", "g", "i"}
-		node.Values = [][]int{{1}, {3}, {5}, {7}, {9}}
+		node.insertKeyValue("a", 1, stringLess, intEqual)
+		node.insertKeyValue("c", 3, stringLess, intEqual)
+		node.insertKeyValue("e", 5, stringLess, intEqual)
+		node.insertKeyValue("g", 7, stringLess, intEqual)
+		node.insertKeyValue("i", 9, stringLess, intEqual)
 
 		idx, found := node.findKeyIndex("e", stringLess)
 		require.True(t, found)
@@ -89,7 +98,7 @@ func TestFindKeyIndex(t *testing.T) {
 func TestInsertKeyValue(t *testing.T) {
 	t.Run("EmptyNode", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.insertKeyValue(5, "five", intLess)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
 
 		require.Equal(t, []int{5}, node.Keys)
 		require.Equal(t, [][]string{{"five"}}, node.Values)
@@ -97,10 +106,10 @@ func TestInsertKeyValue(t *testing.T) {
 
 	t.Run("AppendToEnd", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{1, 3}
-		node.Values = [][]string{{"one"}, {"three"}}
+		node.insertKeyValue(1, "one", intLess, stringEqual)
+		node.insertKeyValue(3, "three", intLess, stringEqual)
 
-		node.insertKeyValue(5, "five", intLess)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
 
 		require.Equal(t, []int{1, 3, 5}, node.Keys)
 		require.Equal(t, [][]string{{"one"}, {"three"}, {"five"}}, node.Values)
@@ -108,10 +117,10 @@ func TestInsertKeyValue(t *testing.T) {
 
 	t.Run("InsertInMiddle", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{1, 5}
-		node.Values = [][]string{{"one"}, {"five"}}
+		node.insertKeyValue(1, "one", intLess, stringEqual)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
 
-		node.insertKeyValue(3, "three", intLess)
+		node.insertKeyValue(3, "three", intLess, stringEqual)
 
 		require.Equal(t, []int{1, 3, 5}, node.Keys)
 		require.Equal(t, [][]string{{"one"}, {"three"}, {"five"}}, node.Values)
@@ -119,10 +128,10 @@ func TestInsertKeyValue(t *testing.T) {
 
 	t.Run("InsertAtBeginning", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{3, 5}
-		node.Values = [][]string{{"three"}, {"five"}}
+		node.insertKeyValue(3, "three", intLess, stringEqual)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
 
-		node.insertKeyValue(1, "one", intLess)
+		node.insertKeyValue(1, "one", intLess, stringEqual)
 
 		require.Equal(t, []int{1, 3, 5}, node.Keys)
 		require.Equal(t, [][]string{{"one"}, {"three"}, {"five"}}, node.Values)
@@ -130,11 +139,11 @@ func TestInsertKeyValue(t *testing.T) {
 
 	t.Run("OutOfBoundsIndex", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{1, 3}
-		node.Values = [][]string{{"one"}, {"three"}}
+		node.insertKeyValue(1, "one", intLess, stringEqual)
+		node.insertKeyValue(3, "three", intLess, stringEqual)
 
 		// Index beyond bounds should append to the end
-		node.insertKeyValue(5, "five", intLess)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
 
 		require.Equal(t, []int{1, 3, 5}, node.Keys)
 		require.Equal(t, [][]string{{"one"}, {"three"}, {"five"}}, node.Values)
@@ -142,14 +151,14 @@ func TestInsertKeyValue(t *testing.T) {
 
 	t.Run("InsertExistingKey", func(t *testing.T) {
 		node := NewLeafNode[string, string]("leaf")
-		node.insertKeyValue("color", "red", stringLess)
-		node.insertKeyValue("size", "small", stringLess)
-		node.insertKeyValue("color", "blue", stringLess)
-		node.insertKeyValue("color", "blue", stringLess)
-		node.insertKeyValue("size", "large", stringLess)
+		node.insertKeyValue("color", "red", stringLess, stringEqual)
+		node.insertKeyValue("size", "small", stringLess, stringEqual)
+		node.insertKeyValue("color", "blue", stringLess, stringEqual)
+		node.insertKeyValue("color", "blue", stringLess, stringEqual)
+		node.insertKeyValue("size", "large", stringLess, stringEqual)
 
 		require.Equal(t, []string{"color", "size"}, node.Keys)
-		require.Equal(t, [][]string{{"red", "blue", "blue"}, {"small", "large"}}, node.Values)
+		require.Equal(t, [][]string{{"red", "blue"}, {"small", "large"}}, node.Values)
 	})
 }
 
@@ -181,8 +190,9 @@ func TestInsertChild(t *testing.T) {
 func TestRemoveKeyValue(t *testing.T) {
 	t.Run("RemoveFromMiddle", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{1, 3, 5}
-		node.Values = [][]string{{"one"}, {"three"}, {"five"}}
+		node.insertKeyValue(1, "one", intLess, stringEqual)
+		node.insertKeyValue(3, "three", intLess, stringEqual)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
 
 		node.removeKeyValue(1) // Remove 3
 
@@ -192,8 +202,9 @@ func TestRemoveKeyValue(t *testing.T) {
 
 	t.Run("RemoveFromBeginning", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{1, 3, 5}
-		node.Values = [][]string{{"one"}, {"three"}, {"five"}}
+		node.insertKeyValue(1, "one", intLess, stringEqual)
+		node.insertKeyValue(3, "three", intLess, stringEqual)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
 
 		node.removeKeyValue(0) // Remove 1
 
@@ -203,8 +214,9 @@ func TestRemoveKeyValue(t *testing.T) {
 
 	t.Run("RemoveFromEnd", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{1, 3, 5}
-		node.Values = [][]string{{"one"}, {"three"}, {"five"}}
+		node.insertKeyValue(1, "one", intLess, stringEqual)
+		node.insertKeyValue(3, "three", intLess, stringEqual)
+		node.insertKeyValue(5, "five", intLess, stringEqual)
 
 		node.removeKeyValue(2) // Remove 5
 
@@ -214,8 +226,7 @@ func TestRemoveKeyValue(t *testing.T) {
 
 	t.Run("RemoveOnlyElement", func(t *testing.T) {
 		node := NewLeafNode[int, string]("leaf")
-		node.Keys = []int{1}
-		node.Values = [][]string{{"one"}}
+		node.insertKeyValue(1, "one", intLess, stringEqual)
 
 		node.removeKeyValue(0)
 
@@ -288,8 +299,8 @@ func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	// Test SaveNode and LoadNode
 	leafID := "leaf-1"
 	leaf := NewLeafNode[string, string](leafID)
-	leaf.insertKeyValue("key1", "value1", stringLess)
-	leaf.insertKeyValue("key2", "value2", stringLess)
+	leaf.insertKeyValue("key1", "value1", stringLess, stringEqual)
+	leaf.insertKeyValue("key2", "value2", stringLess, stringEqual)
 
 	// Create an internal node
 	internalID := "internal-1"

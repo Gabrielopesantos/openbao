@@ -19,26 +19,38 @@ var ErrValueNotFound = errors.New("value not found")
 
 // BPlusTree represents a B+ tree data structure
 type BPlusTree[K comparable, V any] struct {
-	order   int
-	storage NodeStorage[K, V]
-	less    func(a, b K) bool
-	lock    sync.RWMutex
+	order      int
+	storage    NodeStorage[K, V]
+	less       func(a, b K) bool
+	equalValue func(a, b V) bool
+	lock       sync.RWMutex
 }
 
-// NewBPlusTree creates a new B+ tree with the specified order and comparison function
-func NewBPlusTree[K comparable, V any](ctx context.Context, order int, less func(a, b K) bool, storage NodeStorage[K, V]) (*BPlusTree[K, V], error) {
+// NewBPlusTree creates a new B+ tree with the specified order and comparison functions
+func NewBPlusTree[K comparable, V any](
+	ctx context.Context,
+	order int,
+	less func(a, b K) bool,
+	equalValue func(a, b V) bool,
+	storage NodeStorage[K, V],
+) (*BPlusTree[K, V], error) {
 	if order < 2 {
 		return nil, fmt.Errorf("order must be at least 2, got %d", order)
 	}
 
 	if less == nil {
-		return nil, errors.New("comparison function cannot be nil")
+		return nil, errors.New("key comparison function cannot be nil")
+	}
+
+	if equalValue == nil {
+		return nil, errors.New("value equality function cannot be nil")
 	}
 
 	tree := &BPlusTree[K, V]{
-		order:   order,
-		less:    less,
-		storage: storage,
+		order:      order,
+		less:       less,
+		equalValue: equalValue,
+		storage:    storage,
 	}
 
 	// Initialize the tree with a root node
@@ -204,10 +216,7 @@ func (t *BPlusTree[K, V]) DeleteValue(ctx context.Context, key K, value V) error
 	// Find the value in the slice of values
 	values := leaf.Values[idx]
 	for i, v := range values {
-		// Since we can't directly compare values of type V, we'll use a simple approach
-		// In a real implementation, you might want to use reflection or a custom equality function
-		// For now, we'll assume the values are comparable
-		if fmt.Sprintf("%v", v) == fmt.Sprintf("%v", value) {
+		if t.equalValue(v, value) {
 			// Remove the value from the slice
 			values = append(values[:i], values[i+1:]...)
 			if len(values) == 0 {
@@ -290,7 +299,7 @@ func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
 }
 
 func (t *BPlusTree[K, V]) insertIntoLeaf(leaf *Node[K, V], key K, value V) error {
-	leaf.insertKeyValue(key, value, t.less)
+	leaf.insertKeyValue(key, value, t.less, t.equalValue)
 	return nil
 }
 

@@ -62,7 +62,7 @@ func (n *Node[K, V]) insertKey(idx int, key K) {
 }
 
 // insertKeyValue inserts a key-value pair at the specified index (for leaf nodes only)
-func (n *Node[K, V]) insertKeyValue(key K, value V, less func(a, b K) bool) {
+func (n *Node[K, V]) insertKeyValue(key K, value V, less func(a, b K) bool, equalValue func(a, b V) bool) {
 	if n.IsLeaf {
 		// Key index is the index where the key should be inserted
 		idx, found := n.findKeyIndex(key, less)
@@ -71,8 +71,15 @@ func (n *Node[K, V]) insertKeyValue(key K, value V, less func(a, b K) bool) {
 			n.insertKey(idx, key)
 		}
 
-		// If we're inserting at an existing key, append to its values
+		// If we're inserting at an existing key, check for duplicates
 		if found {
+			// Check if the value already exists
+			for _, v := range n.Values[idx] {
+				if equalValue(v, value) {
+					// Value already exists, don't add it again
+					return
+				}
+			}
 			n.Values[idx] = append(n.Values[idx], value)
 			return
 		}
