@@ -168,7 +168,7 @@ func (t *BPlusTree[K, V]) Insert(ctx context.Context, key K, value V) error {
 	return nil
 }
 
-// Delete removes a key-value pair
+// Delete removes all values for a key
 func (t *BPlusTree[K, V]) Delete(ctx context.Context, key K) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
@@ -238,11 +238,6 @@ func (t *BPlusTree[K, V]) DeleteValue(ctx context.Context, key K, value V) error
 
 	// Value not found
 	return ErrValueNotFound
-}
-
-// DeleteAll removes all values for a key
-func (t *BPlusTree[K, V]) DeleteAll(ctx context.Context, key K) error {
-	return t.Delete(ctx, key)
 }
 
 // findLeafNode finds the leaf node where a key belongs
