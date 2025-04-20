@@ -3,7 +3,10 @@ package bptree
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
 	"github.com/stretchr/testify/require"
@@ -158,45 +161,78 @@ func TestStorageAdapterCache(t *testing.T) {
 		require.False(t, ok, "Deleted node should not be in cache")
 	})
 
-	// TODO (gabrielopesantos): Fix test
-	// t.Run("CacheConcurrentAccess", func(t *testing.T) {
-	// 	// Create and save a node
-	// 	node := NewLeafNode[string, string]("node-4")
-	// 	node.Keys = []string{"key1"}
-	// 	node.Values = []string{"value1"}
+	t.Run("CacheConcurrentAccess", func(t *testing.T) {
+		// Create and save a node
+		node := NewLeafNode[string, string]("node-4")
+		node.Keys = []string{"key1"}
+		node.Values = [][]string{{"value1"}}
 
-	// 	err := adapter.SaveNode(ctx, node)
-	// 	require.NoError(t, err, "Failed to save node")
+		err := adapter.SaveNode(ctx, node)
+		require.NoError(t, err, "Failed to save node")
 
-	// 	// Launch multiple goroutines to read and write concurrently
-	// 	done := make(chan bool, 10)
-	// 	for i := 0; i < 10; i++ {
-	// 		go func(i int) {
-	// 			// Read existing node
-	// 			loadedNode, err := adapter.LoadNode(ctx, node.ID)
-	// 			require.NoError(t, err, "Failed to load node")
-	// 			require.Equal(t, node, loadedNode, "Loaded node should match original")
+		// Launch multiple goroutines to read and write concurrently
+		var wg sync.WaitGroup
+		errChan := make(chan error, 10)
 
-	// 			// Create and save new node
-	// 			newNode := NewLeafNode[string, string](fmt.Sprintf("node-%d", i))
-	// 			newNode.Keys = []string{fmt.Sprintf("key%d", i)}
-	// 			newNode.Values = []string{fmt.Sprintf("value%d", i)}
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
 
-	// 			err = adapter.SaveNode(ctx, newNode)
-	// 			require.NoError(t, err, "Failed to save new node")
+				// Read existing node
+				loadedNode, err := adapter.LoadNode(ctx, node.ID)
+				if err != nil {
+					errChan <- fmt.Errorf("error loading node: %w", err)
+					return
+				}
+				if !reflect.DeepEqual(node, loadedNode) {
+					errChan <- fmt.Errorf("loaded node does not match original: expected %v, got %v", node, loadedNode)
+					return
+				}
 
-	// 			// Verify new node is in cache
-	// 			cachedNode, ok := adapter.cache.Get(newNode.ID)
-	// 			require.True(t, ok, "New node should be in cache")
-	// 			require.Equal(t, newNode, cachedNode, "Cached node should match new node")
+				// Create and save new node
+				newNode := NewLeafNode[string, string](fmt.Sprintf("node-%d", i))
+				newNode.Keys = []string{fmt.Sprintf("key%d", i)}
+				newNode.Values = [][]string{{fmt.Sprintf("value%d", i)}}
 
-	// 			done <- true
-	// 		}(i)
-	// 	}
+				err = adapter.SaveNode(ctx, newNode)
+				if err != nil {
+					errChan <- fmt.Errorf("error saving new node: %w", err)
+					return
+				}
 
-	// 	// Wait for all goroutines to complete
-	// 	for i := 0; i < 10; i++ {
-	// 		<-done
-	// 	}
-	// })
+				// Verify new node is in cache
+				cachedNode, ok := adapter.cache.Get(newNode.ID)
+				if !ok {
+					errChan <- fmt.Errorf("new node not found in cache")
+					return
+				}
+				if !reflect.DeepEqual(newNode, cachedNode) {
+					errChan <- fmt.Errorf("cached node does not match new node: expected %v, got %v", newNode, cachedNode)
+					return
+				}
+			}(i)
+		}
+
+		// Wait for all goroutines to complete with a timeout
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// All goroutines completed
+		case <-time.After(5 * time.Second):
+			t.Fatal("test timed out waiting for goroutines to complete")
+		}
+
+		close(errChan)
+
+		// Check for errors
+		for err := range errChan {
+			t.Error(err)
+		}
+	})
 }

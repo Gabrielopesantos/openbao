@@ -5,8 +5,8 @@ type Node[K comparable, V any] struct {
 	ID          string   `json:"id"`
 	IsLeaf      bool     `json:"isLeaf"`
 	Keys        []K      `json:"keys"`
-	Values      [][]V    `json:"values"`
-	ChildrenIDs []string `json:"childrenIDs"`
+	Values      [][]V    `json:"values"`      // Only for leaf nodes
+	ChildrenIDs []string `json:"childrenIDs"` // Only for internal nodes
 	ParentID    string   `json:"parentID"`
 	NextID      string   `json:"nextID"` // ID of the next leaf node
 }

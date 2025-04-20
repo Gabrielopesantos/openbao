@@ -2,7 +2,9 @@ package lru
 
 import (
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestLRU(t *testing.T) {
@@ -98,13 +100,17 @@ func TestLRU(t *testing.T) {
 	// Test concurrent access
 	t.Run("Concurrency", func(t *testing.T) {
 		lru, _ := NewLRU[string, int](100)
-		done := make(chan bool)
+		var wg sync.WaitGroup
+		errChan := make(chan error, 1000) // Buffer for potential errors
 		numGoroutines := 10
 		iterations := 100
 
 		// Launch multiple goroutines to read and write concurrently
 		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
 			go func(routineID int) {
+				defer wg.Done()
+
 				for j := 0; j < iterations; j++ {
 					// Generate a key that this goroutine will work with
 					key := fmt.Sprintf("key-%d-%d", routineID, j)
@@ -116,8 +122,9 @@ func TestLRU(t *testing.T) {
 					// Read from cache
 					val, ok := lru.Get(key)
 					if !ok || val != value {
-						t.Errorf("Goroutine %d: Expected value %d for key %s, got %d (ok: %t)",
+						errChan <- fmt.Errorf("goroutine %d: expected value %d for key %s, got %d (ok: %t)",
 							routineID, value, key, val, ok)
+						return
 					}
 
 					// Occasionally delete a key
@@ -125,17 +132,33 @@ func TestLRU(t *testing.T) {
 						lru.Delete(key)
 						_, ok := lru.Get(key)
 						if ok {
-							t.Errorf("Goroutine %d: Key %s should have been deleted", routineID, key)
+							errChan <- fmt.Errorf("goroutine %d: key %s should have been deleted", routineID, key)
+							return
 						}
 					}
 				}
-				done <- true
 			}(i)
 		}
 
-		// Wait for all goroutines to complete
-		for i := 0; i < numGoroutines; i++ {
-			<-done
+		// Wait for all goroutines to complete with a timeout
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// All goroutines completed
+		case <-time.After(5 * time.Second):
+			t.Fatal("test timed out waiting for goroutines to complete")
+		}
+
+		close(errChan)
+
+		// Check for errors
+		for err := range errChan {
+			t.Error(err)
 		}
 	})
 }

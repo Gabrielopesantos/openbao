@@ -3,7 +3,10 @@ package bptree
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
 	"github.com/stretchr/testify/require"
@@ -303,100 +306,175 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 	}
 }
 
-// func TestBPlusTreeConcurrency(t *testing.T) {
-// 	s := &logical.InmemStorage{}
-// 	adapter, err := NewStorageAdapter[int, string]("bptree_concurrent", s, nil, 100)
-// 	require.NoError(t, err, "Failed to create storage adapter")
+func TestBPlusTreeConcurrency(t *testing.T) {
+	s := &logical.InmemStorage{}
+	adapter, err := NewStorageAdapter[int, string]("bptree_concurrent", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
 
-// 	ctx := context.Background()
-// 	tree, err := NewBPlusTree(ctx, 4, intLess, adapter)
-// 	require.NoError(t, err, "Failed to create B+ tree")
+	ctx := context.Background()
+	tree, err := NewBPlusTree(ctx, 4, intLess, stringEqual, adapter)
+	require.NoError(t, err, "Failed to create B+ tree")
 
-// 	// Test concurrent reads
-// 	t.Run("ConcurrentReads", func(t *testing.T) {
-// 		// Insert some test data
-// 		err = tree.Insert(ctx, 1, "value1")
-// 		require.NoError(t, err)
+	// Test concurrent reads
+	t.Run("ConcurrentReads", func(t *testing.T) {
+		// Insert some test data
+		err = tree.Insert(ctx, 1, "value1")
+		require.NoError(t, err)
 
-// 		// Launch multiple goroutines to read concurrently
-// 		done := make(chan bool, 10)
-// 		for i := 0; i < 10; i++ {
-// 			go func() {
-// 				val, found, err := tree.Get(ctx, 1)
-// 				require.NoError(t, err)
-// 				require.True(t, found)
-// 				require.Equal(t, "value1", val)
-// 				done <- true
-// 			}()
-// 		}
+		var wg sync.WaitGroup
+		errChan := make(chan error, 10)
 
-// 		// Wait for all goroutines to complete
-// 		for i := 0; i < 10; i++ {
-// 			<-done
-// 		}
-// 	})
+		// Launch multiple goroutines to read concurrently
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 
-// 	// Test concurrent writes
-// 	t.Run("ConcurrentWrites", func(t *testing.T) {
-// 		// Launch multiple goroutines to write concurrently
-// 		done := make(chan bool, 10)
-// 		for i := 0; i < 10; i++ {
-// 			go func(i int) {
-// 				err := tree.Insert(ctx, i, fmt.Sprintf("value%d", i))
-// 				require.NoError(t, err)
-// 				done <- true
-// 			}(i)
-// 		}
+				val, found, err := tree.Get(ctx, 1)
+				if err != nil {
+					errChan <- fmt.Errorf("error getting value: %w", err)
+					return
+				}
+				if !found {
+					errChan <- fmt.Errorf("value not found")
+					return
+				}
+				if !reflect.DeepEqual(val, []string{"value1"}) {
+					errChan <- fmt.Errorf("expected value %v, got %v", []string{"value1"}, val)
+					return
+				}
+			}()
+		}
 
-// 		// Wait for all goroutines to complete
-// 		for i := 0; i < 10; i++ {
-// 			<-done
-// 		}
+		// Wait for all goroutines to complete with a timeout
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
 
-// 		// Verify all values were inserted
-// 		for i := 0; i < 10; i++ {
-// 			val, found, err := tree.Get(ctx, i)
-// 			require.NoError(t, err, "Error when getting key %d", i)
-// 			require.True(t, found, "Should find key %d", i)
-// 			require.Equal(t, fmt.Sprintf("value%d", i), val, "Retrieved value should match for key %d", i)
-// 		}
-// 	})
+		select {
+		case <-done:
+			// All goroutines completed
+		case <-time.After(5 * time.Second):
+			t.Fatal("test timed out waiting for goroutines to complete")
+		}
 
-// 	// Test concurrent DeleteValue operations
-// 	t.Run("ConcurrentDeleteValue", func(t *testing.T) {
-// 		// Insert a key with multiple values
-// 		for i := 0; i < 5; i++ {
-// 			err = tree.Insert(ctx, 100, fmt.Sprintf("value%d", i))
-// 			require.NoError(t, err, "Failed to insert value %d", i)
-// 		}
+		close(errChan)
 
-// 		// Verify all values are accessible
-// 		values, found, err := tree.Get(ctx, 100)
-// 		require.NoError(t, err, "Error when getting key")
-// 		require.True(t, found, "Should find inserted key")
-// 		require.Len(t, values, 5, "Should have 5 values")
+		// Check for errors
+		for err := range errChan {
+			t.Error(err)
+		}
+	})
 
-// 		// Launch multiple goroutines to delete values concurrently
-// 		done := make(chan bool, 5)
-// 		for i := 0; i < 5; i++ {
-// 			go func(i int) {
-// 				err := tree.DeleteValue(ctx, 100, fmt.Sprintf("value%d", i))
-// 				require.NoError(t, err, "Failed to delete value %d", i)
-// 				done <- true
-// 			}(i)
-// 		}
+	// Test concurrent writes
+	t.Run("ConcurrentWrites", func(t *testing.T) {
+		var wg sync.WaitGroup
+		errChan := make(chan error, 10)
 
-// 		// Wait for all goroutines to complete
-// 		for i := 0; i < 5; i++ {
-// 			<-done
-// 		}
+		// Launch multiple goroutines to write concurrently
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
 
-// 		// Verify the key is no longer accessible
-// 		_, found, err = tree.Get(ctx, 100)
-// 		require.NoError(t, err, "Error when getting key after all values deleted")
-// 		require.False(t, found, "Should not find key after all values deleted")
-// 	})
-// }
+				err := tree.Insert(ctx, i, fmt.Sprintf("value%d", i))
+				if err != nil {
+					errChan <- fmt.Errorf("error inserting key %d: %w", i, err)
+					return
+				}
+			}(i)
+		}
+
+		// Wait for all goroutines to complete with a timeout
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// All goroutines completed
+		case <-time.After(5 * time.Second):
+			t.Fatal("test timed out waiting for goroutines to complete")
+		}
+
+		close(errChan)
+
+		// Check for errors
+		for err := range errChan {
+			t.Error(err)
+		}
+
+		// Verify all values were inserted
+		for i := 0; i < 10; i++ {
+			val, found, err := tree.Get(ctx, i)
+			require.NoError(t, err, "Error when getting key %d", i)
+			require.True(t, found, "Should find key %d", i)
+			require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val, "Retrieved value should match for key %d", i)
+		}
+	})
+
+	// Test concurrent DeleteValue operations
+	t.Run("ConcurrentDeleteValue", func(t *testing.T) {
+		// Insert a key with multiple values
+		for i := 0; i < 5; i++ {
+			err = tree.Insert(ctx, 100, fmt.Sprintf("value%d", i))
+			require.NoError(t, err, "Failed to insert value %d", i)
+		}
+
+		// Verify all values are accessible
+		values, found, err := tree.Get(ctx, 100)
+		require.NoError(t, err, "Error when getting key")
+		require.True(t, found, "Should find inserted key")
+		require.Len(t, values, 5, "Should have 5 values")
+
+		var wg sync.WaitGroup
+		errChan := make(chan error, 5)
+
+		// Launch multiple goroutines to delete values concurrently
+		for i := 0; i < 5; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+
+				err := tree.DeleteValue(ctx, 100, fmt.Sprintf("value%d", i))
+				if err != nil {
+					errChan <- fmt.Errorf("error deleting value %d: %w", i, err)
+					return
+				}
+			}(i)
+		}
+
+		// Wait for all goroutines to complete with a timeout
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// All goroutines completed
+		case <-time.After(5 * time.Second):
+			t.Fatal("test timed out waiting for goroutines to complete")
+		}
+
+		close(errChan)
+
+		// Check for errors
+		for err := range errChan {
+			t.Error(err)
+		}
+
+		// Verify the key is no longer accessible
+		_, found, err = tree.Get(ctx, 100)
+		require.NoError(t, err, "Error when getting key after all values deleted")
+		require.False(t, found, "Should not find key after all values deleted")
+	})
+}
 
 func TestBPlusTreeEdgeCases(t *testing.T) {
 	s := &logical.InmemStorage{}
