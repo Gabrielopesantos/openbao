@@ -31,7 +31,11 @@ func (c *LRU[K, V]) Add(key K, value V) {
 	c.lru.Add(key, value)
 }
 
-// Size returns the number of items in the cache.
+// Purge removes all items from the cache
+func (c *LRU[K, V]) Purge() {
+	c.lru.Purge()
+}
+
 func (c *LRU[K, V]) Size() int {
 	return c.size
 }

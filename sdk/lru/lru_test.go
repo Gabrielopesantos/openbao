@@ -47,6 +47,18 @@ func TestLRU(t *testing.T) {
 		if ok {
 			t.Error("Expected key to be deleted")
 		}
+
+		// Test Purge
+		lru.Add("key3", 3)
+		lru.Add("key4", 4)
+		lru.Add("key5", 5)
+		lru.Purge() // Clear the cache
+		for i := 3; i <= 5; i++ {
+			_, ok := lru.Get(fmt.Sprintf("key%d", i))
+			if ok {
+				t.Errorf("Expected key%d to be purged", i)
+			}
+		}
 	})
 
 	t.Run("Overwrite", func(t *testing.T) {
