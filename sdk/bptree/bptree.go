@@ -20,7 +20,7 @@ var ErrValueNotFound = errors.New("value not found")
 // BPlusTree represents a B+ tree data structure
 type BPlusTree[K comparable, V any] struct {
 	order      int
-	storage    NodeStorage[K, V]
+	storage    Storage[K, V]
 	less       func(a, b K) bool
 	equalValue func(a, b V) bool
 	lock       sync.RWMutex
@@ -32,7 +32,7 @@ func NewBPlusTree[K comparable, V any](
 	order int,
 	less func(a, b K) bool,
 	equalValue func(a, b V) bool,
-	storage NodeStorage[K, V],
+	storage Storage[K, V],
 ) (*BPlusTree[K, V], error) {
 	if order < 2 {
 		return nil, fmt.Errorf("order must be at least 2, got %d", order)
@@ -54,7 +54,7 @@ func NewBPlusTree[K comparable, V any](
 	}
 
 	// Initialize the tree with a root node
-	rootID, err := storage.GetRootID(ctx)
+	rootID, err := tree.storage.GetRootID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -117,19 +117,29 @@ func (t *BPlusTree[K, V]) Get(ctx context.Context, key K) ([]V, bool, error) {
 }
 
 func (t *BPlusTree[K, V]) get(ctx context.Context, key K) ([]V, bool, error) {
-	leaf, err := t.findLeafNode(ctx, key)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to find leaf node: %w", err)
-	}
+	var values []V
+	var found bool
+	err := t.storage.WithTransaction(ctx, func() error {
+		// Load the root node
+		leaf, err := t.findLeafNode(ctx, key)
+		if err != nil {
+			return fmt.Errorf("failed to find leaf node: %w", err)
+		}
 
-	// If we get here, we are at a leaf node
-	idx, found := leaf.findKeyIndex(key, t.less)
-	if found {
-		return leaf.Values[idx], true, nil
-	}
+		// If we get here, we are at a leaf node
+		idx, indexFound := leaf.findKeyIndex(key, t.less)
+		if indexFound {
+			// If the key is found, return the values
+			values = leaf.Values[idx]
+			found = true
+			return nil
+		}
 
-	// Key not found is a valid state, not an error
-	return nil, false, nil
+		// Key not found is a valid state, not an error
+		return nil
+	})
+
+	return values, found, err
 }
 
 // Insert inserts a key-value pair
@@ -137,35 +147,37 @@ func (t *BPlusTree[K, V]) Insert(ctx context.Context, key K, value V) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	leaf, err := t.findLeafNode(ctx, key)
-	if err != nil {
-		return err
-	}
+	return t.storage.WithTransaction(ctx, func() error {
+		leaf, err := t.findLeafNode(ctx, key)
+		if err != nil {
+			return err
+		}
 
-	err = t.insertIntoLeaf(leaf, key, value)
-	if err != nil {
-		return err
-	}
+		err = t.insertIntoLeaf(leaf, key, value)
+		if err != nil {
+			return err
+		}
 
-	// If the leaf is overfull, we need to split it
-	if t.isOverfull(leaf) {
-		newLeaf, splitKey := t.splitLeafNode(leaf)
-		// Save both leaf nodes after splitting
+		// If the leaf is overfull, we need to split it
+		if t.isOverfull(leaf) {
+			newLeaf, splitKey := t.splitLeafNode(leaf)
+			// Save both leaf nodes after splitting
+			if err := t.storage.SaveNode(ctx, leaf); err != nil {
+				return fmt.Errorf("failed to save original leaf node: %w", err)
+			}
+			if err := t.storage.SaveNode(ctx, newLeaf); err != nil {
+				return fmt.Errorf("failed to save new leaf node: %w", err)
+			}
+			return t.insertIntoParent(ctx, leaf, newLeaf, splitKey)
+		}
+
+		// Save the leaf node after insertion
 		if err := t.storage.SaveNode(ctx, leaf); err != nil {
-			return fmt.Errorf("failed to save original leaf node: %w", err)
+			return fmt.Errorf("failed to save leaf node: %w", err)
 		}
-		if err := t.storage.SaveNode(ctx, newLeaf); err != nil {
-			return fmt.Errorf("failed to save new leaf node: %w", err)
-		}
-		return t.insertIntoParent(ctx, leaf, newLeaf, splitKey)
-	}
 
-	// Save the leaf node after insertion
-	if err := t.storage.SaveNode(ctx, leaf); err != nil {
-		return fmt.Errorf("failed to save leaf node: %w", err)
-	}
-
-	return nil
+		return nil
+	})
 }
 
 // Delete removes all values for a key
@@ -173,71 +185,81 @@ func (t *BPlusTree[K, V]) Delete(ctx context.Context, key K) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	leaf, err := t.findLeafNode(ctx, key)
-	if err != nil {
-		return err
-	}
+	return t.storage.WithTransaction(ctx, func() error {
+		// Find the leaf node where the key belongs
+		leaf, err := t.findLeafNode(ctx, key)
+		if err != nil {
+			return err
+		}
 
-	// Check if the key exists in the leaf node
-	idx, found := leaf.findKeyIndex(key, t.less)
-	if !found {
-		return ErrKeyNotFound
-	}
+		// Check if the key exists in the leaf node
+		idx, found := leaf.findKeyIndex(key, t.less)
+		if !found {
+			return ErrKeyNotFound
+		}
 
-	// Delete the key-value pair
-	leaf.removeKeyValue(idx)
+		// Delete the key-value pair
+		leaf.removeKeyValue(idx)
 
-	// Save the leaf node after deletion
-	if err := t.storage.SaveNode(ctx, leaf); err != nil {
-		return fmt.Errorf("failed to save leaf node: %w", err)
-	}
+		// Save the leaf node after deletion
+		if err := t.storage.SaveNode(ctx, leaf); err != nil {
+			return fmt.Errorf("failed to save leaf node: %w", err)
+		}
 
-	// TODO (gabrielopesantos): Handle underflow
+		// TODO (gabrielopesantos): Handle underflow
 
-	return nil
+		return nil
+	})
 }
+
+// Purge removes all keys and values from the tree
+// func (t *BPlusTree[K, V]) Purge(ctx context.Context) error {
+// 	return nil
+// }
 
 // DeleteValue removes a specific value for a key
 func (t *BPlusTree[K, V]) DeleteValue(ctx context.Context, key K, value V) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	leaf, err := t.findLeafNode(ctx, key)
-	if err != nil {
-		return err
-	}
-
-	// Check if the key exists in the leaf node
-	idx, found := leaf.findKeyIndex(key, t.less)
-	if !found {
-		return ErrKeyNotFound
-	}
-
-	// Find the value in the slice of values
-	values := leaf.Values[idx]
-	for i, v := range values {
-		if t.equalValue(v, value) {
-			// Remove the value from the slice
-			values = append(values[:i], values[i+1:]...)
-			if len(values) == 0 {
-				// If no values left, remove the key
-				leaf.removeKeyValue(idx)
-			} else {
-				// Otherwise, update the values
-				leaf.Values[idx] = values
-			}
-
-			// Save the leaf node after deletion
-			if err := t.storage.SaveNode(ctx, leaf); err != nil {
-				return fmt.Errorf("failed to save leaf node: %w", err)
-			}
-
-			return nil
+	return t.storage.WithTransaction(ctx, func() error {
+		leaf, err := t.findLeafNode(ctx, key)
+		if err != nil {
+			return err
 		}
-	}
 
-	// Value not found
-	return ErrValueNotFound
+		// Check if the key exists in the leaf node
+		idx, found := leaf.findKeyIndex(key, t.less)
+		if !found {
+			return ErrKeyNotFound
+		}
+
+		// Find the value in the slice of values
+		values := leaf.Values[idx]
+		for i, v := range values {
+			if t.equalValue(v, value) {
+				// Remove the value from the slice
+				values = append(values[:i], values[i+1:]...)
+				if len(values) == 0 {
+					// If no values left, remove the key
+					leaf.removeKeyValue(idx)
+				} else {
+					// Otherwise, update the values
+					leaf.Values[idx] = values
+				}
+
+				// Save the leaf node after deletion
+				if err := t.storage.SaveNode(ctx, leaf); err != nil {
+					return fmt.Errorf("failed to save leaf node: %w", err)
+				}
+
+				return nil
+			}
+		}
+
+		// Value not found
+		return ErrValueNotFound
+	})
 }
 
 // findLeafNode finds the leaf node where a key belongs
@@ -474,9 +496,4 @@ func (t *BPlusTree[K, V]) loadNode(ctx context.Context, id string) (*Node[K, V],
 // saveNode saves a node to storage
 func (t *BPlusTree[K, V]) saveNode(ctx context.Context, node *Node[K, V]) error {
 	return t.storage.SaveNode(ctx, node)
-}
-
-// WithTransaction wraps the storage in a transaction
-func (t *BPlusTree[K, V]) WithTransaction(ctx context.Context, fn func() error) error {
-	return t.storage.WithTransaction(ctx, fn)
 }

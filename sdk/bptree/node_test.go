@@ -293,7 +293,7 @@ func TestRemoveChild(t *testing.T) {
 func TestNodeInterfacingWithStorageAdapter(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter, err := NewStorageAdapter[string, string]("bptree", s, nil, 100)
+	adapter, err := NewNodeStorage[string, string]("bptree", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	// Test SaveNode and LoadNode
