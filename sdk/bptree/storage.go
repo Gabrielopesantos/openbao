@@ -11,6 +11,13 @@ import (
 	"github.com/openbao/openbao/sdk/v2/lru"
 )
 
+const (
+	NodePath      = "nodes"
+	RootPath      = "root"
+	MetadataPath  = "metadata"
+	BPlusTreePath = "bptree"
+)
+
 type Storage[K comparable, V any] interface {
 	// LoadNode loads a node from storage
 	LoadNode(ctx context.Context, id string) (*Node[K, V], error)
@@ -22,16 +29,9 @@ type Storage[K comparable, V any] interface {
 	GetRootID(ctx context.Context) (string, error)
 	// SetRootID sets the ID of the root node
 	SetRootID(ctx context.Context, id string) error
-	// WithTransaction wraps the storage in a transaction
-	WithTransaction(ctx context.Context, fn func() error) error
 }
 
-const (
-	NodePath      = "nodes"
-	RootPath      = "root"
-	MetadataPath  = "metadata"
-	BPlusTreePath = "bptree"
-)
+var _ Storage[string, string] = &NodeStorage[string, string]{}
 
 // NodeStorage adapts the logical.Storage interface to the bptree.Storage interface
 type NodeStorage[K comparable, V any] struct {
@@ -217,15 +217,6 @@ func (s *NodeStorage[K, V]) SetRootID(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *NodeStorage[K, V]) WithTransaction(ctx context.Context, function func() error) error {
-	// TODO (gabrielopesantos): This is actually all wrong;
-	err := logical.WithTransaction(ctx, s.storage, func(storage logical.Storage) error {
-		return function()
-	})
-	s.flushCacheOperations(err == nil)
-	return err
-}
-
 type cacheOp string
 
 const (
@@ -270,5 +261,71 @@ func (s *NodeStorage[K, V]) flushCacheOperations(apply bool) error {
 
 	// Clear the queue after flushing
 	s.operationQueue = nil
+	return nil
+}
+
+type TransactionalNodeStorage[K comparable, V any] struct {
+	NodeStorage[K, V]
+}
+
+var _ TransactionalStorage[string, string] = &TransactionalNodeStorage[string, string]{}
+
+type NodeTransaction[K comparable, V any] struct {
+	NodeStorage[K, V]
+}
+
+var _ Transaction[string, string] = &NodeTransaction[string, string]{}
+
+func (s *TransactionalNodeStorage[K, V]) BeginReadOnlyTx(ctx context.Context) (Transaction[K, V], error) {
+	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &NodeTransaction[K, V]{
+		NodeStorage: NodeStorage[K, V]{
+			storage: tx,
+		},
+	}, nil
+}
+
+func (s *TransactionalNodeStorage[K, V]) BeginTx(ctx context.Context) (Transaction[K, V], error) {
+	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &NodeTransaction[K, V]{
+		NodeStorage: NodeStorage[K, V]{
+			storage: tx,
+		},
+	}, nil
+}
+
+func (s *NodeTransaction[K, V]) Commit(ctx context.Context) error {
+	return s.storage.(logical.Transaction).Commit(ctx)
+}
+
+func (s *NodeTransaction[K, V]) Rollback(ctx context.Context) error {
+	return s.storage.(logical.Transaction).Rollback(ctx)
+}
+
+// WithTransaction will begin and end a transaction around the execution of the `callback` function.
+func WithTransaction[K comparable, V any](ctx context.Context, originalStorage Storage[K, V], callback func(Storage[K, V]) error) error {
+	if txnStorage, ok := originalStorage.(TransactionalStorage[K, V]); ok {
+		txn, err := txnStorage.BeginTx(ctx)
+		if err != nil {
+			return err
+		}
+		defer txn.Rollback(ctx)
+		if err := callback(txnStorage); err != nil {
+			return err
+		}
+		if err := txn.Commit(ctx); err != nil {
+			return err
+		}
+	} else {
+		return callback(originalStorage)
+	}
 	return nil
 }

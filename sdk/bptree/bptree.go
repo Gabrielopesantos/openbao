@@ -104,10 +104,11 @@ func (t *BPlusTree[K, V]) isOverfull(node *Node[K, V]) bool {
 	return len(node.Keys) > t.maxKeys()
 }
 
+// NOTE (gabrielopesantos): Unused for now;
 // isUnderfull checks if a node has fallen below its minimum capacity
-func (t *BPlusTree[K, V]) isUnderfull(node *Node[K, V]) bool {
-	return len(node.Keys) < t.minKeys()
-}
+// func (t *BPlusTree[K, V]) isUnderfull(node *Node[K, V]) bool {
+// 	return len(node.Keys) < t.minKeys()
+// }
 
 // Get retrieves all values for a key
 func (t *BPlusTree[K, V]) Get(ctx context.Context, key K) ([]V, bool, error) {
@@ -119,7 +120,13 @@ func (t *BPlusTree[K, V]) Get(ctx context.Context, key K) ([]V, bool, error) {
 func (t *BPlusTree[K, V]) get(ctx context.Context, key K) ([]V, bool, error) {
 	var values []V
 	var found bool
-	err := t.storage.WithTransaction(ctx, func() error {
+	err := WithTransaction(ctx, t.storage, func(s Storage[K, V]) error {
+		originalStorage := t.storage
+		defer func() {
+			t.storage = originalStorage
+		}()
+		t.storage = s
+
 		// Load the root node
 		leaf, err := t.findLeafNode(ctx, key)
 		if err != nil {
@@ -147,7 +154,13 @@ func (t *BPlusTree[K, V]) Insert(ctx context.Context, key K, value V) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	return t.storage.WithTransaction(ctx, func() error {
+	return WithTransaction(ctx, t.storage, func(s Storage[K, V]) error {
+		originalStorage := t.storage
+		defer func() {
+			t.storage = originalStorage
+		}()
+		t.storage = s
+
 		leaf, err := t.findLeafNode(ctx, key)
 		if err != nil {
 			return err
@@ -185,7 +198,13 @@ func (t *BPlusTree[K, V]) Delete(ctx context.Context, key K) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	return t.storage.WithTransaction(ctx, func() error {
+	return WithTransaction(ctx, t.storage, func(s Storage[K, V]) error {
+		originalStorage := t.storage
+		defer func() {
+			t.storage = originalStorage
+		}()
+		t.storage = s
+
 		// Find the leaf node where the key belongs
 		leaf, err := t.findLeafNode(ctx, key)
 		if err != nil {
@@ -222,7 +241,13 @@ func (t *BPlusTree[K, V]) DeleteValue(ctx context.Context, key K, value V) error
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	return t.storage.WithTransaction(ctx, func() error {
+	return WithTransaction(ctx, t.storage, func(s Storage[K, V]) error {
+		originalStorage := t.storage
+		defer func() {
+			t.storage = originalStorage
+		}()
+		t.storage = s
+
 		leaf, err := t.findLeafNode(ctx, key)
 		if err != nil {
 			return err
