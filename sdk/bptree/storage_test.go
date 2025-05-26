@@ -16,7 +16,7 @@ import (
 func TestStorageOperations(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	nodeStorage, err := NewNodeStorage[string, string]("bptree", s, nil, 100)
+	nodeStorage, err := NewNodeStorage[string]("bptree", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage nodeStorage")
 
 	// Test SetRootID and GetRootID
@@ -31,7 +31,7 @@ func TestStorageOperations(t *testing.T) {
 
 	// Test SaveNode and LoadNode
 	nodeID := "node-1"
-	node := NewLeafNode[string, string](nodeID)
+	node := NewLeafNode[string](nodeID)
 	node.Keys = append(node.Keys, "key1", "key2")
 	node.Values = append(node.Values, []string{"value1", "value2"})
 
@@ -70,12 +70,12 @@ func TestStorageOperations(t *testing.T) {
 func TestStoragenodeStorageCache(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	nodeStorage, err := NewNodeStorage[string, string]("bptree_cache", s, nil, 100)
+	nodeStorage, err := NewNodeStorage[string]("bptree_cache", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage nodeStorage")
 
 	t.Run("CacheHit", func(t *testing.T) {
 		// Create and save a node
-		node := NewLeafNode[string, string]("node-1")
+		node := NewLeafNode[string]("node-1")
 		node.Keys = []string{"key1"}
 		node.Values = [][]string{{"value1"}}
 
@@ -98,7 +98,7 @@ func TestStoragenodeStorageCache(t *testing.T) {
 
 	t.Run("CacheUpdate", func(t *testing.T) {
 		// Create and save a node
-		node := NewLeafNode[string, string]("node-2")
+		node := NewLeafNode[string]("node-2")
 		node.Keys = []string{"key1"}
 		node.Values = [][]string{{"value1"}}
 
@@ -129,7 +129,7 @@ func TestStoragenodeStorageCache(t *testing.T) {
 	t.Run("CacheEviction", func(t *testing.T) {
 		// Create and save many nodes to force eviction
 		for i := 0; i < 150; i++ {
-			node := NewLeafNode[string, string](fmt.Sprintf("node-%d", i))
+			node := NewLeafNode[string](fmt.Sprintf("node-%d", i))
 			node.Keys = []string{fmt.Sprintf("key%d", i)}
 			node.Values = [][]string{{fmt.Sprintf("value%d", i)}}
 
@@ -141,13 +141,13 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		nodeStorage.flushCacheOperations(true)
 
 		// Verify some nodes are in cache
-		recentNode := NewLeafNode[string, string]("node-149")
+		recentNode := NewLeafNode[string]("node-149")
 		cachedNode, ok := nodeStorage.cache.Get(recentNode.ID)
 		require.True(t, ok, "Recent node should be in cache")
 		require.Equal(t, recentNode.ID, cachedNode.ID, "Cached node should match recent node")
 
 		// Verify older nodes might have been evicted but are still retrievable
-		oldNode := NewLeafNode[string, string]("node-0")
+		oldNode := NewLeafNode[string]("node-0")
 		loadedNode, err := nodeStorage.LoadNode(ctx, oldNode.ID)
 		require.NoError(t, err, "Failed to load old node")
 		require.Equal(t, oldNode.ID, loadedNode.ID, "Loaded node should match old node")
@@ -155,7 +155,7 @@ func TestStoragenodeStorageCache(t *testing.T) {
 
 	t.Run("CacheDeletion", func(t *testing.T) {
 		// Create and save a node
-		node := NewLeafNode[string, string]("node-3")
+		node := NewLeafNode[string]("node-3")
 		node.Keys = []string{"key1"}
 		node.Values = [][]string{{"value1"}}
 
@@ -184,7 +184,7 @@ func TestStoragenodeStorageCache(t *testing.T) {
 
 	t.Run("CacheConcurrentAccess", func(t *testing.T) {
 		// Create and save a node
-		node := NewLeafNode[string, string]("node-1")
+		node := NewLeafNode[string]("node-1")
 		node.Keys = []string{"key1"}
 		node.Values = [][]string{{"value1"}}
 
@@ -215,7 +215,7 @@ func TestStoragenodeStorageCache(t *testing.T) {
 				}
 
 				// Create and save new node
-				newNode := NewLeafNode[string, string](fmt.Sprintf("node-%d", i))
+				newNode := NewLeafNode[string](fmt.Sprintf("node-%d", i))
 				newNode.Keys = []string{fmt.Sprintf("key%d", i)}
 				newNode.Values = [][]string{{fmt.Sprintf("value%d", i)}}
 

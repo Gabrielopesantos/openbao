@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -11,16 +12,6 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 	"github.com/stretchr/testify/require"
 )
-
-// stringLess is a comparison function for strings
-func stringLess(a, b string) bool {
-	return a < b
-}
-
-// intLess is a comparison function for integers
-func intLess(a, b int) bool {
-	return a < b
-}
 
 // stringEqual is a comparison function for strings
 func stringEqual(a, b string) bool {
@@ -37,33 +28,25 @@ func TestNewBPlusTree(t *testing.T) {
 	s := &logical.InmemStorage{}
 
 	t.Run("DefaultOrder", func(t *testing.T) {
-		adapter, err := NewNodeStorage[string, string]("bptree_default", s, nil, 100)
+		adapter, err := NewNodeStorage[string]("bptree_default", s, nil, 100)
 		require.NoError(t, err, "Failed to create storage adapter")
-		tree, err := NewBPlusTree(ctx, 0, stringLess, stringEqual, adapter)
+		tree, err := NewBPlusTree(ctx, 0, stringEqual, adapter)
 		require.Error(t, err, "Order must be at least 2")
 		require.Nil(t, tree)
 	})
 
 	t.Run("CustomOrder", func(t *testing.T) {
-		adapter, err := NewNodeStorage[string, string]("bptree_custom", s, nil, 100)
+		adapter, err := NewNodeStorage[string]("bptree_custom", s, nil, 100)
 		require.NoError(t, err, "Failed to create storage adapter")
-		tree, err := NewBPlusTree(ctx, 4, stringLess, stringEqual, adapter)
+		tree, err := NewBPlusTree(ctx, 4, stringEqual, adapter)
 		require.NoError(t, err, "Failed to create B+ tree with custom order")
 		require.Equal(t, 4, tree.order)
 	})
 
-	t.Run("NilComparisonFunction", func(t *testing.T) {
-		adapter, err := NewNodeStorage[string, string]("bptree_nil_comp", s, nil, 100)
-		require.NoError(t, err, "Failed to create storage adapter")
-		tree, err := NewBPlusTree(ctx, 4, nil, stringEqual, adapter)
-		require.Error(t, err, "Should fail with nil comparison function")
-		require.Nil(t, tree)
-	})
-
 	t.Run("NilEqualityFunction", func(t *testing.T) {
-		adapter, err := NewNodeStorage[string, string]("bptree_nil_equal", s, nil, 100)
+		adapter, err := NewNodeStorage[string]("bptree_nil_equal", s, nil, 100)
 		require.NoError(t, err, "Failed to create storage adapter")
-		tree, err := NewBPlusTree(ctx, 4, stringLess, nil, adapter)
+		tree, err := NewBPlusTree(ctx, 4, nil, adapter)
 		require.Error(t, err, "Should fail with nil equality function")
 		require.Nil(t, tree)
 	})
@@ -72,10 +55,10 @@ func TestNewBPlusTree(t *testing.T) {
 func TestBPlusTreeBasicOperations(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter, err := NewNodeStorage[string, string]("bptree_basic", s, nil, 100)
+	adapter, err := NewNodeStorage[string]("bptree_basic", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
-	tree, err := NewBPlusTree(ctx, 4, stringLess, stringEqual, adapter)
+	tree, err := NewBPlusTree(ctx, 4, stringEqual, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	t.Run("EmptyTree", func(t *testing.T) {
@@ -118,86 +101,86 @@ func TestBPlusTreeBasicOperations(t *testing.T) {
 
 func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
 	s := &logical.InmemStorage{}
-	adapter, err := NewNodeStorage[int, string]("bptree_split", s, nil, 100)
+	adapter, err := NewNodeStorage[string]("bptree_split", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	// Create a tree with small order to test splitting
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, 2, intLess, stringEqual, adapter)
+	tree, err := NewBPlusTree(ctx, 2, stringEqual, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert keys that will cause leaf splitting
-	err = tree.Insert(ctx, 10, "value10")
+	err = tree.Insert(ctx, "10", "value10")
 	require.NoError(t, err, "Failed to insert key 10")
 
-	err = tree.Insert(ctx, 20, "value20")
+	err = tree.Insert(ctx, "20", "value20")
 	require.NoError(t, err, "Failed to insert key 20")
 
 	// This should cause a leaf split
-	err = tree.Insert(ctx, 30, "value30")
+	err = tree.Insert(ctx, "30", "value30")
 	require.NoError(t, err, "Failed to insert key 30")
 
 	// Verify all values are accessible
 	testCases := []struct {
-		key   int
+		key   string
 		value []string
 	}{
-		{10, []string{"value10"}},
-		{20, []string{"value20"}},
-		{30, []string{"value30"}},
+		{"10", []string{"value10"}},
+		{"20", []string{"value20"}},
+		{"30", []string{"value30"}},
 	}
 
 	for _, tc := range testCases {
 		val, found, err := tree.Get(ctx, tc.key)
-		require.NoError(t, err, fmt.Sprintf("Error when getting key %d", tc.key))
-		require.True(t, found, fmt.Sprintf("Should find inserted key %d", tc.key))
-		require.Equal(t, tc.value, val, fmt.Sprintf("Retrieved value should match inserted value for key %d", tc.key))
+		require.NoError(t, err, fmt.Sprintf("Error when getting key %v", tc.key))
+		require.True(t, found, fmt.Sprintf("Should find inserted key %v", tc.key))
+		require.Equal(t, tc.value, val, fmt.Sprintf("Retrieved value should match inserted value for key %v", tc.key))
 	}
 
 	// Continue inserting to create internal node splits
-	err = tree.Insert(ctx, 40, "value40")
+	err = tree.Insert(ctx, "40", "value40")
 	require.NoError(t, err, "Failed to insert key 40")
 
-	err = tree.Insert(ctx, 50, "value50")
+	err = tree.Insert(ctx, "50", "value50")
 	require.NoError(t, err, "Failed to insert key 50")
 
-	err = tree.Insert(ctx, 60, "value60")
+	err = tree.Insert(ctx, "60", "value60")
 	require.NoError(t, err, "Failed to insert key 60")
 
-	err = tree.Insert(ctx, 70, "value70")
+	err = tree.Insert(ctx, "70", "value70")
 	require.NoError(t, err, "Failed to insert key 70")
 
-	err = tree.Insert(ctx, 80, "value80")
+	err = tree.Insert(ctx, "80", "value80")
 	require.NoError(t, err, "Failed to insert key 80")
 
 	// Verify all values after more complex splitting
 	for _, tc := range []struct {
-		key   int
+		key   string
 		value []string
 	}{
-		{10, []string{"value10"}},
-		{20, []string{"value20"}},
-		{30, []string{"value30"}},
-		{40, []string{"value40"}},
-		{50, []string{"value50"}},
-		{60, []string{"value60"}},
-		{70, []string{"value70"}},
-		{80, []string{"value80"}},
+		{"10", []string{"value10"}},
+		{"20", []string{"value20"}},
+		{"30", []string{"value30"}},
+		{"40", []string{"value40"}},
+		{"50", []string{"value50"}},
+		{"60", []string{"value60"}},
+		{"70", []string{"value70"}},
+		{"80", []string{"value80"}},
 	} {
 		val, found, err := tree.Get(ctx, tc.key)
-		require.NoError(t, err, fmt.Sprintf("Error when getting key %d", tc.key))
-		require.True(t, found, fmt.Sprintf("Should find inserted key %d", tc.key))
-		require.Equal(t, tc.value, val, fmt.Sprintf("Retrieved value should match inserted value for key %d", tc.key))
+		require.NoError(t, err, fmt.Sprintf("Error when getting key %v", tc.key))
+		require.True(t, found, fmt.Sprintf("Should find inserted key %v", tc.key))
+		require.Equal(t, tc.value, val, fmt.Sprintf("Retrieved value should match inserted value for key %v", tc.key))
 	}
 }
 
 func TestBPlusTreeDelete(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter, err := NewNodeStorage[string, int]("bptree_delete", s, nil, 100)
+	adapter, err := NewNodeStorage[int]("bptree_delete", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
-	tree, err := NewBPlusTree(ctx, 4, stringLess, intEqual, adapter)
+	tree, err := NewBPlusTree(ctx, 4, intEqual, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert keys
@@ -262,22 +245,22 @@ func TestBPlusTreeDelete(t *testing.T) {
 
 func TestBPlusTreeLargeDataSet(t *testing.T) {
 	s := &logical.InmemStorage{}
-	adapter, err := NewNodeStorage[int, string]("bptree_large", s, nil, 100)
+	adapter, err := NewNodeStorage[string]("bptree_large", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, 8, intLess, stringEqual, adapter)
+	tree, err := NewBPlusTree(ctx, 8, stringEqual, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert 100 keys
 	for i := 1; i <= 100; i++ {
-		err = tree.Insert(ctx, i, fmt.Sprintf("value%d", i))
+		err = tree.Insert(ctx, strconv.Itoa(i), fmt.Sprintf("value%d", i))
 		require.NoError(t, err, "Failed to insert key %d", i)
 	}
 
 	// Verify all keys exist
 	for i := 1; i <= 100; i++ {
-		val, found, err := tree.Get(ctx, i)
+		val, found, err := tree.Get(ctx, strconv.Itoa(i))
 		require.NoError(t, err, "Error when getting key %d", i)
 		require.True(t, found, "Should find key %d", i)
 		require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val, "Retrieved value should match for key %d", i)
@@ -285,13 +268,13 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 
 	// Delete every other key
 	for i := 2; i <= 100; i += 2 {
-		err = tree.Delete(ctx, i)
+		err = tree.Delete(ctx, strconv.Itoa(i))
 		require.NoError(t, err, "Failed to delete key %d", i)
 	}
 
 	// Verify odd keys exist and even keys don't
 	for i := 1; i <= 100; i++ {
-		val, found, err := tree.Get(ctx, i)
+		val, found, err := tree.Get(ctx, strconv.Itoa(i))
 		require.NoError(t, err, "Error when getting key %d", i)
 
 		if i%2 == 1 {
@@ -308,17 +291,17 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 
 func TestBPlusTreeConcurrency(t *testing.T) {
 	s := &logical.InmemStorage{}
-	adapter, err := NewNodeStorage[int, string]("bptree_concurrent", s, nil, 100)
+	adapter, err := NewNodeStorage[string]("bptree_concurrent", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, 4, intLess, stringEqual, adapter)
+	tree, err := NewBPlusTree(ctx, 4, stringEqual, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Test concurrent reads
 	t.Run("ConcurrentReads", func(t *testing.T) {
 		// Insert some test data
-		err = tree.Insert(ctx, 1, "value1")
+		err = tree.Insert(ctx, "1", "value1")
 		require.NoError(t, err)
 
 		var wg sync.WaitGroup
@@ -330,7 +313,7 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 			go func() {
 				defer wg.Done()
 
-				val, found, err := tree.Get(ctx, 1)
+				val, found, err := tree.Get(ctx, "1")
 				if err != nil {
 					errChan <- fmt.Errorf("error getting value: %w", err)
 					return
@@ -379,7 +362,7 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 
-				err := tree.Insert(ctx, i, fmt.Sprintf("value%d", i))
+				err := tree.Insert(ctx, strconv.Itoa(i), fmt.Sprintf("value%d", i))
 				if err != nil {
 					errChan <- fmt.Errorf("error inserting key %d: %w", i, err)
 					return
@@ -410,7 +393,7 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 
 		// Verify all values were inserted
 		for i := 0; i < 10; i++ {
-			val, found, err := tree.Get(ctx, i)
+			val, found, err := tree.Get(ctx, strconv.Itoa(i))
 			require.NoError(t, err, "Error when getting key %d", i)
 			require.True(t, found, "Should find key %d", i)
 			require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val, "Retrieved value should match for key %d", i)
@@ -421,12 +404,12 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 	t.Run("ConcurrentDeleteValue", func(t *testing.T) {
 		// Insert a key with multiple values
 		for i := 0; i < 5; i++ {
-			err = tree.Insert(ctx, 100, fmt.Sprintf("value%d", i))
+			err = tree.Insert(ctx, "100", fmt.Sprintf("value%d", i))
 			require.NoError(t, err, "Failed to insert value %d", i)
 		}
 
 		// Verify all values are accessible
-		values, found, err := tree.Get(ctx, 100)
+		values, found, err := tree.Get(ctx, "100")
 		require.NoError(t, err, "Error when getting key")
 		require.True(t, found, "Should find inserted key")
 		require.Len(t, values, 5, "Should have 5 values")
@@ -440,7 +423,7 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 
-				err := tree.DeleteValue(ctx, 100, fmt.Sprintf("value%d", i))
+				err := tree.DeleteValue(ctx, "100", fmt.Sprintf("value%d", i))
 				if err != nil {
 					errChan <- fmt.Errorf("error deleting value %d: %w", i, err)
 					return
@@ -470,7 +453,7 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 		}
 
 		// Verify the key is no longer accessible
-		_, found, err = tree.Get(ctx, 100)
+		_, found, err = tree.Get(ctx, "100")
 		require.NoError(t, err, "Error when getting key after all values deleted")
 		require.False(t, found, "Should not find key after all values deleted")
 	})
@@ -478,25 +461,25 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 
 func TestBPlusTreeEdgeCases(t *testing.T) {
 	s := &logical.InmemStorage{}
-	adapter, err := NewNodeStorage[int, string]("bptree_edge", s, nil, 100)
+	adapter, err := NewNodeStorage[string]("bptree_edge", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, 2, intLess, stringEqual, adapter) // Small order to test splits
+	tree, err := NewBPlusTree(ctx, 2, stringEqual, adapter) // Small order to test splits
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	t.Run("SplitAtRoot", func(t *testing.T) {
 		// Insert keys that will cause root split
-		err = tree.Insert(ctx, 1, "value1")
+		err = tree.Insert(ctx, "1", "value1")
 		require.NoError(t, err)
-		err = tree.Insert(ctx, 2, "value2")
+		err = tree.Insert(ctx, "2", "value2")
 		require.NoError(t, err)
-		err = tree.Insert(ctx, 3, "value3") // This should cause a split
+		err = tree.Insert(ctx, "3", "value3") // This should cause a split
 		require.NoError(t, err)
 
 		// Verify all values are accessible
 		for i := 1; i <= 3; i++ {
-			val, found, err := tree.Get(ctx, i)
+			val, found, err := tree.Get(ctx, strconv.Itoa(i))
 			require.NoError(t, err)
 			require.True(t, found)
 			require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val)
@@ -505,16 +488,16 @@ func TestBPlusTreeEdgeCases(t *testing.T) {
 
 	t.Run("SplitAtLeaf", func(t *testing.T) {
 		// Insert more keys to cause leaf splits
-		err = tree.Insert(ctx, 4, "value4")
+		err = tree.Insert(ctx, "4", "value4")
 		require.NoError(t, err)
-		err = tree.Insert(ctx, 5, "value5")
+		err = tree.Insert(ctx, "5", "value5")
 		require.NoError(t, err)
-		err = tree.Insert(ctx, 6, "value6") // This should cause a leaf split
+		err = tree.Insert(ctx, "6", "value6") // This should cause a leaf split
 		require.NoError(t, err)
 
 		// Verify all values are accessible
 		for i := 1; i <= 6; i++ {
-			val, found, err := tree.Get(ctx, i)
+			val, found, err := tree.Get(ctx, strconv.Itoa(i))
 			require.NoError(t, err)
 			require.True(t, found)
 			require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val)
@@ -523,19 +506,19 @@ func TestBPlusTreeEdgeCases(t *testing.T) {
 }
 
 // MockStorageAdapter simulates storage errors
-type MockStorageAdapter[K comparable, V any] struct {
-	*NodeStorage[K, V]
+type MockStorageAdapter[V any] struct {
+	*NodeStorage[V]
 	shouldFail bool
 }
 
-func (m *MockStorageAdapter[K, V]) SaveNode(ctx context.Context, node *Node[K, V]) error {
+func (m *MockStorageAdapter[V]) SaveNode(ctx context.Context, node *Node[V]) error {
 	if m.shouldFail {
 		return fmt.Errorf("simulated storage error")
 	}
 	return m.NodeStorage.SaveNode(ctx, node)
 }
 
-func (m *MockStorageAdapter[K, V]) LoadNode(ctx context.Context, id string) (*Node[K, V], error) {
+func (m *MockStorageAdapter[V]) LoadNode(ctx context.Context, id string) (*Node[V], error) {
 	if m.shouldFail {
 		return nil, fmt.Errorf("simulated storage error")
 	}
@@ -545,14 +528,14 @@ func (m *MockStorageAdapter[K, V]) LoadNode(ctx context.Context, id string) (*No
 func TestBPlusTreeStorageErrors(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	baseAdapter, err := NewNodeStorage[string, string]("bptree_storage", s, nil, 100)
+	baseAdapter, err := NewNodeStorage[string]("bptree_storage", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
-	mockAdapter := &MockStorageAdapter[string, string]{
+	mockAdapter := &MockStorageAdapter[string]{
 		NodeStorage: baseAdapter,
 		shouldFail:  false,
 	}
 
-	tree, err := NewBPlusTree(ctx, 4, stringLess, stringEqual, mockAdapter)
+	tree, err := NewBPlusTree(ctx, 4, stringEqual, mockAdapter)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert some test data
@@ -609,10 +592,10 @@ func TestBPlusTreeStorageErrors(t *testing.T) {
 func TestBPlusTreeDeleteValue(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter, err := NewNodeStorage[string, string]("bptree_delete_value", s, nil, 100)
+	adapter, err := NewNodeStorage[string]("bptree_delete_value", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
-	tree, err := NewBPlusTree(ctx, 4, stringLess, stringEqual, adapter)
+	tree, err := NewBPlusTree(ctx, 4, stringEqual, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert a key with multiple values
@@ -672,10 +655,10 @@ func TestBPlusTreeDeleteValue(t *testing.T) {
 func TestBPlusTreeDuplicateValues(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	adapter, err := NewNodeStorage[string, string]("bptree_duplicate", s, nil, 100)
+	adapter, err := NewNodeStorage[string]("bptree_duplicate", s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
-	tree, err := NewBPlusTree(ctx, 4, stringLess, stringEqual, adapter)
+	tree, err := NewBPlusTree(ctx, 4, stringEqual, adapter)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert initial values

@@ -18,37 +18,30 @@ var ErrKeyNotFound = errors.New("key not found")
 var ErrValueNotFound = errors.New("value not found")
 
 // BPlusTree represents a B+ tree data structure
-type BPlusTree[K comparable, V any] struct {
+type BPlusTree[V any] struct {
 	order      int
-	storage    Storage[K, V]
-	less       func(a, b K) bool
+	storage    Storage[V]
 	equalValue func(a, b V) bool
 	lock       sync.RWMutex
 }
 
 // NewBPlusTree creates a new B+ tree with the specified order and comparison functions
-func NewBPlusTree[K comparable, V any](
+func NewBPlusTree[V any](
 	ctx context.Context,
 	order int,
-	less func(a, b K) bool,
 	equalValue func(a, b V) bool,
-	storage Storage[K, V],
-) (*BPlusTree[K, V], error) {
+	storage Storage[V],
+) (*BPlusTree[V], error) {
 	if order < 2 {
 		return nil, fmt.Errorf("order must be at least 2, got %d", order)
-	}
-
-	if less == nil {
-		return nil, errors.New("key comparison function cannot be nil")
 	}
 
 	if equalValue == nil {
 		return nil, errors.New("value equality function cannot be nil")
 	}
 
-	tree := &BPlusTree[K, V]{
+	tree := &BPlusTree[V]{
 		order:      order,
-		less:       less,
 		equalValue: equalValue,
 		storage:    storage,
 	}
@@ -61,7 +54,7 @@ func NewBPlusTree[K comparable, V any](
 
 	if rootID == "" {
 		// Create a new root node
-		rootNode := NewLeafNode[K, V](genUuid())
+		rootNode := NewLeafNode[V](genUUID())
 
 		// Save the root node
 		if err := storage.SaveNode(ctx, rootNode); err != nil {
@@ -78,7 +71,7 @@ func NewBPlusTree[K comparable, V any](
 }
 
 // getRoot loads the root node from storage
-func (t *BPlusTree[K, V]) getRoot(ctx context.Context) (*Node[K, V], error) {
+func (t *BPlusTree[V]) getRoot(ctx context.Context) (*Node[V], error) {
 	rootID, err := t.storage.GetRootID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root ID: %w", err)
@@ -90,37 +83,37 @@ func (t *BPlusTree[K, V]) getRoot(ctx context.Context) (*Node[K, V], error) {
 }
 
 // minKeys returns the minimum number of keys a node must have
-func (t *BPlusTree[K, V]) minKeys() int {
+func (t *BPlusTree[V]) minKeys() int {
 	return (t.order + 1) / 2 // ⌈m/2⌉
 }
 
 // maxKeys returns the maximum number of keys a node can have
-func (t *BPlusTree[K, V]) maxKeys() int {
+func (t *BPlusTree[V]) maxKeys() int {
 	return t.order // m
 }
 
 // isOverfull checks if a node has exceeded its maximum capacity
-func (t *BPlusTree[K, V]) isOverfull(node *Node[K, V]) bool {
+func (t *BPlusTree[V]) isOverfull(node *Node[V]) bool {
 	return len(node.Keys) > t.maxKeys()
 }
 
 // NOTE (gabrielopesantos): Unused for now;
 // isUnderfull checks if a node has fallen below its minimum capacity
-// func (t *BPlusTree[K, V]) isUnderfull(node *Node[K, V]) bool {
+// func (t *BPlusTree[V]) isUnderfull(node *Node[V]) bool {
 // 	return len(node.Keys) < t.minKeys()
 // }
 
 // Get retrieves all values for a key
-func (t *BPlusTree[K, V]) Get(ctx context.Context, key K) ([]V, bool, error) {
+func (t *BPlusTree[V]) Get(ctx context.Context, key string) ([]V, bool, error) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 	return t.get(ctx, key)
 }
 
-func (t *BPlusTree[K, V]) get(ctx context.Context, key K) ([]V, bool, error) {
+func (t *BPlusTree[V]) get(ctx context.Context, key string) ([]V, bool, error) {
 	var values []V
 	var found bool
-	err := WithTransaction(ctx, t.storage, func(s Storage[K, V]) error {
+	err := WithTransaction(ctx, t.storage, func(s Storage[V]) error {
 		originalStorage := t.storage
 		defer func() {
 			t.storage = originalStorage
@@ -134,7 +127,7 @@ func (t *BPlusTree[K, V]) get(ctx context.Context, key K) ([]V, bool, error) {
 		}
 
 		// If we get here, we are at a leaf node
-		idx, indexFound := leaf.findKeyIndex(key, t.less)
+		idx, indexFound := leaf.findKeyIndex(key)
 		if indexFound {
 			// If the key is found, return the values
 			values = leaf.Values[idx]
@@ -150,11 +143,11 @@ func (t *BPlusTree[K, V]) get(ctx context.Context, key K) ([]V, bool, error) {
 }
 
 // Insert inserts a key-value pair
-func (t *BPlusTree[K, V]) Insert(ctx context.Context, key K, value V) error {
+func (t *BPlusTree[V]) Insert(ctx context.Context, key string, value V) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	return WithTransaction(ctx, t.storage, func(s Storage[K, V]) error {
+	return WithTransaction(ctx, t.storage, func(s Storage[V]) error {
 		originalStorage := t.storage
 		defer func() {
 			t.storage = originalStorage
@@ -194,11 +187,11 @@ func (t *BPlusTree[K, V]) Insert(ctx context.Context, key K, value V) error {
 }
 
 // Delete removes all values for a key
-func (t *BPlusTree[K, V]) Delete(ctx context.Context, key K) error {
+func (t *BPlusTree[V]) Delete(ctx context.Context, key string) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	return WithTransaction(ctx, t.storage, func(s Storage[K, V]) error {
+	return WithTransaction(ctx, t.storage, func(s Storage[V]) error {
 		originalStorage := t.storage
 		defer func() {
 			t.storage = originalStorage
@@ -212,7 +205,7 @@ func (t *BPlusTree[K, V]) Delete(ctx context.Context, key K) error {
 		}
 
 		// Check if the key exists in the leaf node
-		idx, found := leaf.findKeyIndex(key, t.less)
+		idx, found := leaf.findKeyIndex(key)
 		if !found {
 			return ErrKeyNotFound
 		}
@@ -237,11 +230,11 @@ func (t *BPlusTree[K, V]) Delete(ctx context.Context, key K) error {
 // }
 
 // DeleteValue removes a specific value for a key
-func (t *BPlusTree[K, V]) DeleteValue(ctx context.Context, key K, value V) error {
+func (t *BPlusTree[V]) DeleteValue(ctx context.Context, key string, value V) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	return WithTransaction(ctx, t.storage, func(s Storage[K, V]) error {
+	return WithTransaction(ctx, t.storage, func(s Storage[V]) error {
 		originalStorage := t.storage
 		defer func() {
 			t.storage = originalStorage
@@ -254,7 +247,7 @@ func (t *BPlusTree[K, V]) DeleteValue(ctx context.Context, key K, value V) error
 		}
 
 		// Check if the key exists in the leaf node
-		idx, found := leaf.findKeyIndex(key, t.less)
+		idx, found := leaf.findKeyIndex(key)
 		if !found {
 			return ErrKeyNotFound
 		}
@@ -288,7 +281,7 @@ func (t *BPlusTree[K, V]) DeleteValue(ctx context.Context, key K, value V) error
 }
 
 // findLeafNode finds the leaf node where a key belongs
-func (t *BPlusTree[K, V]) findLeafNode(ctx context.Context, key K) (*Node[K, V], error) {
+func (t *BPlusTree[V]) findLeafNode(ctx context.Context, key string) (*Node[V], error) {
 	node, err := t.getRoot(ctx)
 	if err != nil {
 		return nil, err
@@ -298,7 +291,7 @@ func (t *BPlusTree[K, V]) findLeafNode(ctx context.Context, key K) (*Node[K, V],
 		found := false
 		for i, k := range node.Keys {
 			// If search key is less than current key, go left
-			if t.less(key, k) {
+			if key < k {
 				var err error
 				node, err = t.loadNode(ctx, node.ChildrenIDs[i])
 				if err != nil {
@@ -320,9 +313,9 @@ func (t *BPlusTree[K, V]) findLeafNode(ctx context.Context, key K) (*Node[K, V],
 	return node, nil
 }
 
-func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
+func (t *BPlusTree[V]) splitLeafNode(leaf *Node[V]) (*Node[V], string) {
 	// Create a new leaf node
-	newLeaf := NewLeafNode[K, V](genUuid())
+	newLeaf := NewLeafNode[V](genUUID())
 
 	// Determine split point so that both nodes meet minimum occupancy
 	// For leaf nodes, we want to ensure both nodes have at least ⌈m/2⌉ keys
@@ -340,21 +333,21 @@ func (t *BPlusTree[K, V]) splitLeafNode(leaf *Node[K, V]) (*Node[K, V], K) {
 	return newLeaf, newLeaf.Keys[0]
 }
 
-func (t *BPlusTree[K, V]) insertIntoLeaf(leaf *Node[K, V], key K, value V) error {
-	leaf.insertKeyValue(key, value, t.less, t.equalValue)
+func (t *BPlusTree[V]) insertIntoLeaf(leaf *Node[V], key string, value V) error {
+	leaf.insertKeyValue(key, value, t.equalValue)
 	return nil
 }
 
 // insertIntoParent inserts a key and right node into the parent of left node
-func (t *BPlusTree[K, V]) insertIntoParent(ctx context.Context, leftNode *Node[K, V], rightNode *Node[K, V], splitKey K) error {
+func (t *BPlusTree[V]) insertIntoParent(ctx context.Context, leftNode *Node[V], rightNode *Node[V], splitKey string) error {
 	// If leftNode is the root, create a new root
 	rootID, err := t.storage.GetRootID(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get root ID: %w", err)
 	}
 	if leftNode.ID == rootID {
-		newRoot := NewInternalNode[K, V](genUuid())
-		newRoot.Keys = []K{splitKey}
+		newRoot := NewInternalNode[V](genUUID())
+		newRoot.Keys = []string{splitKey}
 		newRoot.ChildrenIDs = []string{leftNode.ID, rightNode.ID}
 
 		// Update parent references
@@ -383,7 +376,7 @@ func (t *BPlusTree[K, V]) insertIntoParent(ctx context.Context, leftNode *Node[K
 	}
 
 	// Find position in parent to insert the new key and child
-	insertPos, _ := parent.findKeyIndex(splitKey, t.less)
+	insertPos, _ := parent.findKeyIndex(splitKey)
 
 	// Insert the split key and right node into the parent
 	parent.insertKey(insertPos, splitKey)
@@ -418,9 +411,9 @@ func (t *BPlusTree[K, V]) insertIntoParent(ctx context.Context, leftNode *Node[K
 	return nil
 }
 
-func (t *BPlusTree[K, V]) splitInternalNode(ctx context.Context, node *Node[K, V]) (*Node[K, V], K) {
+func (t *BPlusTree[V]) splitInternalNode(ctx context.Context, node *Node[V]) (*Node[V], string) {
 	// Create a new internal node
-	newInternal := NewInternalNode[K, V](genUuid())
+	newInternal := NewInternalNode[V](genUUID())
 
 	// Determine split point so that both nodes meet minimum occupancy
 	// For internal nodes, we want to ensure both nodes have at least ⌈m/2⌉ children
@@ -455,7 +448,7 @@ func (t *BPlusTree[K, V]) splitInternalNode(ctx context.Context, node *Node[K, V
 }
 
 // Print prints a visual representation of the B+ tree
-func (t *BPlusTree[K, V]) Print() error {
+func (t *BPlusTree[V]) Print() error {
 	root, err := t.getRoot(context.Background())
 	if err != nil {
 		return err
@@ -465,7 +458,7 @@ func (t *BPlusTree[K, V]) Print() error {
 }
 
 // printNode recursively prints a node and its children
-func (t *BPlusTree[K, V]) printNode(node *Node[K, V], prefix string, isLast bool) error {
+func (t *BPlusTree[V]) printNode(node *Node[V], prefix string, isLast bool) error {
 	// Print the current node
 	if node.IsLeaf {
 		log.Printf("%s%s Leaf Node (ID: %s)\n", prefix, getPrefix(isLast), node.ID)
@@ -514,11 +507,11 @@ func getPrefix(isLast bool) string {
 }
 
 // loadNode loads a node from storage
-func (t *BPlusTree[K, V]) loadNode(ctx context.Context, id string) (*Node[K, V], error) {
+func (t *BPlusTree[V]) loadNode(ctx context.Context, id string) (*Node[V], error) {
 	return t.storage.LoadNode(ctx, id)
 }
 
 // saveNode saves a node to storage
-func (t *BPlusTree[K, V]) saveNode(ctx context.Context, node *Node[K, V]) error {
+func (t *BPlusTree[V]) saveNode(ctx context.Context, node *Node[V]) error {
 	return t.storage.SaveNode(ctx, node)
 }

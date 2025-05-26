@@ -1,10 +1,10 @@
 package bptree
 
 // Node represents a node in the B+ tree
-type Node[K comparable, V any] struct {
+type Node[V any] struct {
 	ID          string   `json:"id"`
 	IsLeaf      bool     `json:"isLeaf"`
-	Keys        []K      `json:"keys"`
+	Keys        []string `json:"keys"`
 	Values      [][]V    `json:"values"`      // Only for leaf nodes
 	ChildrenIDs []string `json:"childrenIDs"` // Only for internal nodes
 	ParentID    string   `json:"parentID"`
@@ -12,33 +12,33 @@ type Node[K comparable, V any] struct {
 }
 
 // NewLeafNode creates a new leaf node
-func NewLeafNode[K comparable, V any](id string) *Node[K, V] {
-	return &Node[K, V]{
+func NewLeafNode[V any](id string) *Node[V] {
+	return &Node[V]{
 		ID:     id,
 		IsLeaf: true,
-		Keys:   make([]K, 0),
+		Keys:   make([]string, 0),
 		Values: make([][]V, 0),
 	}
 }
 
 // NewInternalNode creates a new internal node
-func NewInternalNode[K comparable, V any](id string) *Node[K, V] {
-	return &Node[K, V]{
+func NewInternalNode[V any](id string) *Node[V] {
+	return &Node[V]{
 		ID:          id,
 		IsLeaf:      false,
-		Keys:        make([]K, 0),
+		Keys:        make([]string, 0),
 		ChildrenIDs: make([]string, 0),
 	}
 }
 
 // findKeyIndex finds the index where a key should be inserted or is located
 // Returns the index and whether the key was found
-func (n *Node[K, V]) findKeyIndex(key K, less func(a, b K) bool) (int, bool) {
+func (n *Node[V]) findKeyIndex(key string) (int, bool) {
 	for i, k := range n.Keys {
 		if k == key {
 			return i, true
 		}
-		if less(key, k) {
+		if key < k {
 			return i, false
 		}
 	}
@@ -46,7 +46,7 @@ func (n *Node[K, V]) findKeyIndex(key K, less func(a, b K) bool) (int, bool) {
 }
 
 // insertKey inserts a key at the specified index
-func (n *Node[K, V]) insertKey(idx int, key K) {
+func (n *Node[V]) insertKey(idx int, key string) {
 	if idx < 0 || idx > len(n.Keys) {
 		idx = len(n.Keys) // Append if index is out of bounds
 	}
@@ -62,10 +62,10 @@ func (n *Node[K, V]) insertKey(idx int, key K) {
 }
 
 // insertKeyValue inserts a key-value pair at the specified index (for leaf nodes only)
-func (n *Node[K, V]) insertKeyValue(key K, value V, less func(a, b K) bool, equalValue func(a, b V) bool) {
+func (n *Node[V]) insertKeyValue(key string, value V, equalValue func(a, b V) bool) {
 	if n.IsLeaf {
 		// Key index is the index where the key should be inserted
-		idx, found := n.findKeyIndex(key, less)
+		idx, found := n.findKeyIndex(key)
 		if !found {
 			// Insert the key if it doesn't exist
 			n.insertKey(idx, key)
@@ -96,7 +96,7 @@ func (n *Node[K, V]) insertKeyValue(key K, value V, less func(a, b K) bool, equa
 }
 
 // insertChild inserts a child node ID at the specified index
-func (n *Node[K, V]) insertChild(idx int, childID string) {
+func (n *Node[V]) insertChild(idx int, childID string) {
 	if idx < 0 || idx > len(n.ChildrenIDs) {
 		idx = len(n.ChildrenIDs) // Append if index is out of bounds
 	}
@@ -112,12 +112,12 @@ func (n *Node[K, V]) insertChild(idx int, childID string) {
 }
 
 // removeKeyValue removes a key-value pair at the specified index
-func (n *Node[K, V]) removeKeyValue(idx int) {
+func (n *Node[V]) removeKeyValue(idx int) {
 	n.Keys = append(n.Keys[:idx], n.Keys[idx+1:]...)
 	n.Values = append(n.Values[:idx], n.Values[idx+1:]...)
 }
 
 // removeChild removes a child at the specified index
-func (n *Node[K, V]) removeChild(idx int) {
+func (n *Node[V]) removeChild(idx int) {
 	n.ChildrenIDs = append(n.ChildrenIDs[:idx], n.ChildrenIDs[idx+1:]...)
 }
