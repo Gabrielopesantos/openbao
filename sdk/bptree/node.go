@@ -1,5 +1,7 @@
 package bptree
 
+import "slices"
+
 // Node represents a node in the B+ tree
 type Node struct {
 	ID          string     `json:"id"`
@@ -48,17 +50,12 @@ func (n *Node) findKeyIndex(key string) (int, bool) {
 // insertKey inserts a key at the specified index
 func (n *Node) insertKey(idx int, key string) {
 	if idx < 0 || idx > len(n.Keys) {
+		// NOTE (gsantos): ?
 		idx = len(n.Keys) // Append if index is out of bounds
 	}
 
-	// Append to make room for the new key
-	n.Keys = append(n.Keys, key)
-
-	// If we're not appending to the end, shift elements to make room
-	if idx < len(n.Keys)-1 {
-		copy(n.Keys[idx+1:], n.Keys[idx:len(n.Keys)-1])
-		n.Keys[idx] = key
-	}
+	// Insert new key
+	n.Keys = slices.Insert(n.Keys, idx, key)
 }
 
 // insertKeyValue inserts a key-value pair at the specified index (for leaf nodes only)
@@ -74,51 +71,36 @@ func (n *Node) insertKeyValue(key string, value string) {
 
 		// If we're inserting at an existing key, check for duplicates
 		if found {
-			// Check if the value already exists
-			for _, v := range n.Values[idx] {
-				if v == value {
-					// Value already exists, don't add it again
-					return
-				}
+			// Check if the value already exists and return early if it does
+			if slices.Contains(n.Values[idx], value) {
+				return
 			}
 			n.Values[idx] = append(n.Values[idx], value)
 			return
 		}
 
-		// Otherwise, create a new slice for this key
-		n.Values = append(n.Values, []string{value})
-
-		// If we're not appending to the end, shift elements to make room
-		if idx < len(n.Values)-1 {
-			copy(n.Values[idx+1:], n.Values[idx:len(n.Values)-1])
-			n.Values[idx] = []string{value}
-		}
+		// Insert new value slices
+		n.Values = slices.Insert(n.Values, idx, []string{value})
 	}
 }
 
 // insertChild inserts a child node ID at the specified index
 func (n *Node) insertChild(idx int, childID string) {
 	if idx < 0 || idx > len(n.ChildrenIDs) {
+		//.NOTE (gsantos): Are we sure about this?
 		idx = len(n.ChildrenIDs) // Append if index is out of bounds
 	}
-
-	// Append to make room for the new child
-	n.ChildrenIDs = append(n.ChildrenIDs, childID)
-
-	// If we're not appending to the end, shift elements to make room
-	if idx < len(n.ChildrenIDs)-1 {
-		copy(n.ChildrenIDs[idx+1:], n.ChildrenIDs[idx:len(n.ChildrenIDs)-1])
-		n.ChildrenIDs[idx] = childID
-	}
+	// Insert new childID
+	n.ChildrenIDs = slices.Insert(n.ChildrenIDs, idx, childID)
 }
 
 // removeKeyValue removes a key-value pair at the specified index
 func (n *Node) removeKeyValue(idx int) {
-	n.Keys = append(n.Keys[:idx], n.Keys[idx+1:]...)
-	n.Values = append(n.Values[:idx], n.Values[idx+1:]...)
+	n.Keys = slices.Delete(n.Keys, idx, idx+1)
+	n.Values = slices.Delete(n.Values, idx, idx+1)
 }
 
 // removeChild removes a child at the specified index
 func (n *Node) removeChild(idx int) {
-	n.ChildrenIDs = append(n.ChildrenIDs[:idx], n.ChildrenIDs[idx+1:]...)
+	n.ChildrenIDs = slices.Delete(n.ChildrenIDs, idx, idx+1)
 }

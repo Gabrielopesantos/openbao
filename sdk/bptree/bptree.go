@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 )
 
@@ -440,6 +441,7 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, node *Node) (*Node, s
 	return newInternal, newSplitKey
 }
 
+// TODO (gsantos): Delete
 // Print prints a visual representation of the B+ tree
 func (t *BPlusTree) Print() error {
 	root, err := t.getRoot(context.Background())
@@ -450,8 +452,16 @@ func (t *BPlusTree) Print() error {
 	return t.printNode(root, "", true)
 }
 
+// TODO (gsantos): Delete
 // printNode recursively prints a node and its children
 func (t *BPlusTree) printNode(node *Node, prefix string, isLast bool) error {
+	getPrefix := func(isLast bool) string {
+		if isLast {
+			return "└── "
+		}
+		return "├── "
+	}
+
 	// Print the current node
 	if node.IsLeaf {
 		log.Printf("%s%s Leaf Node (ID: %s)\n", prefix, getPrefix(isLast), node.ID)
@@ -491,14 +501,7 @@ func (t *BPlusTree) printNode(node *Node, prefix string, isLast bool) error {
 	return nil
 }
 
-// getPrefix returns the appropriate prefix character for tree visualization
-func getPrefix(isLast bool) string {
-	if isLast {
-		return "└── "
-	}
-	return "├── "
-}
-
+// NOTE (gsantos): ?
 // loadNode loads a node from storage
 func (t *BPlusTree) loadNode(ctx context.Context, id string) (*Node, error) {
 	return t.storage.LoadNode(ctx, id)
