@@ -7,13 +7,13 @@ import (
 	"context"
 )
 
-type Transactional[V any] interface {
-	BeginReadOnlyTx(context.Context) (Transaction[V], error)
-	BeginTx(context.Context) (Transaction[V], error)
+type Transactional interface {
+	BeginReadOnlyTx(context.Context) (Transaction, error)
+	BeginTx(context.Context) (Transaction, error)
 }
 
-type Transaction[V any] interface {
-	Storage[V]
+type Transaction interface {
+	Storage
 	Commit(context.Context) error
 
 	// Rollback a transaction, preventing any changes from being persisted.
@@ -23,7 +23,7 @@ type Transaction[V any] interface {
 
 // TransactionalStorage is implemented if a storage backend implements
 // Transactional as well.
-type TransactionalStorage[V any] interface {
-	Storage[V]
-	Transactional[V]
+type TransactionalStorage interface {
+	Storage
+	Transactional
 }

@@ -1,29 +1,29 @@
 package bptree
 
 // Node represents a node in the B+ tree
-type Node[V any] struct {
-	ID          string   `json:"id"`
-	IsLeaf      bool     `json:"isLeaf"`
-	Keys        []string `json:"keys"`
-	Values      [][]V    `json:"values"`      // Only for leaf nodes
-	ChildrenIDs []string `json:"childrenIDs"` // Only for internal nodes
-	ParentID    string   `json:"parentID"`
-	NextID      string   `json:"nextID"` // ID of the next leaf node
+type Node struct {
+	ID          string     `json:"id"`
+	IsLeaf      bool       `json:"isLeaf"`
+	Keys        []string   `json:"keys"`
+	Values      [][]string `json:"values"`      // Only for leaf nodes
+	ChildrenIDs []string   `json:"childrenIDs"` // Only for internal nodes
+	ParentID    string     `json:"parentID"`
+	NextID      string     `json:"nextID"` // ID of the next leaf node
 }
 
 // NewLeafNode creates a new leaf node
-func NewLeafNode[V any](id string) *Node[V] {
-	return &Node[V]{
+func NewLeafNode(id string) *Node {
+	return &Node{
 		ID:     id,
 		IsLeaf: true,
 		Keys:   make([]string, 0),
-		Values: make([][]V, 0),
+		Values: make([][]string, 0),
 	}
 }
 
 // NewInternalNode creates a new internal node
-func NewInternalNode[V any](id string) *Node[V] {
-	return &Node[V]{
+func NewInternalNode(id string) *Node {
+	return &Node{
 		ID:          id,
 		IsLeaf:      false,
 		Keys:        make([]string, 0),
@@ -33,7 +33,7 @@ func NewInternalNode[V any](id string) *Node[V] {
 
 // findKeyIndex finds the index where a key should be inserted or is located
 // Returns the index and whether the key was found
-func (n *Node[V]) findKeyIndex(key string) (int, bool) {
+func (n *Node) findKeyIndex(key string) (int, bool) {
 	for i, k := range n.Keys {
 		if k == key {
 			return i, true
@@ -46,7 +46,7 @@ func (n *Node[V]) findKeyIndex(key string) (int, bool) {
 }
 
 // insertKey inserts a key at the specified index
-func (n *Node[V]) insertKey(idx int, key string) {
+func (n *Node) insertKey(idx int, key string) {
 	if idx < 0 || idx > len(n.Keys) {
 		idx = len(n.Keys) // Append if index is out of bounds
 	}
@@ -62,7 +62,8 @@ func (n *Node[V]) insertKey(idx int, key string) {
 }
 
 // insertKeyValue inserts a key-value pair at the specified index (for leaf nodes only)
-func (n *Node[V]) insertKeyValue(key string, value V, equalValue func(a, b V) bool) {
+// NOTE (gabrielopesantos): Return something?
+func (n *Node) insertKeyValue(key string, value string) {
 	if n.IsLeaf {
 		// Key index is the index where the key should be inserted
 		idx, found := n.findKeyIndex(key)
@@ -75,7 +76,7 @@ func (n *Node[V]) insertKeyValue(key string, value V, equalValue func(a, b V) bo
 		if found {
 			// Check if the value already exists
 			for _, v := range n.Values[idx] {
-				if equalValue(v, value) {
+				if v == value {
 					// Value already exists, don't add it again
 					return
 				}
@@ -85,18 +86,18 @@ func (n *Node[V]) insertKeyValue(key string, value V, equalValue func(a, b V) bo
 		}
 
 		// Otherwise, create a new slice for this key
-		n.Values = append(n.Values, []V{value})
+		n.Values = append(n.Values, []string{value})
 
 		// If we're not appending to the end, shift elements to make room
 		if idx < len(n.Values)-1 {
 			copy(n.Values[idx+1:], n.Values[idx:len(n.Values)-1])
-			n.Values[idx] = []V{value}
+			n.Values[idx] = []string{value}
 		}
 	}
 }
 
 // insertChild inserts a child node ID at the specified index
-func (n *Node[V]) insertChild(idx int, childID string) {
+func (n *Node) insertChild(idx int, childID string) {
 	if idx < 0 || idx > len(n.ChildrenIDs) {
 		idx = len(n.ChildrenIDs) // Append if index is out of bounds
 	}
@@ -112,12 +113,12 @@ func (n *Node[V]) insertChild(idx int, childID string) {
 }
 
 // removeKeyValue removes a key-value pair at the specified index
-func (n *Node[V]) removeKeyValue(idx int) {
+func (n *Node) removeKeyValue(idx int) {
 	n.Keys = append(n.Keys[:idx], n.Keys[idx+1:]...)
 	n.Values = append(n.Values[:idx], n.Values[idx+1:]...)
 }
 
 // removeChild removes a child at the specified index
-func (n *Node[V]) removeChild(idx int) {
+func (n *Node) removeChild(idx int) {
 	n.ChildrenIDs = append(n.ChildrenIDs[:idx], n.ChildrenIDs[idx+1:]...)
 }

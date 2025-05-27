@@ -18,11 +18,11 @@ const (
 	BPlusTreePath = "bptree"
 )
 
-type Storage[V any] interface {
+type Storage interface {
 	// LoadNode loads a node from storage
-	LoadNode(ctx context.Context, id string) (*Node[V], error)
+	LoadNode(ctx context.Context, id string) (*Node, error)
 	// SaveNode saves a node to storage
-	SaveNode(ctx context.Context, node *Node[V]) error
+	SaveNode(ctx context.Context, node *Node) error
 	// DeleteNode deletes a node from storage
 	DeleteNode(ctx context.Context, id string) error
 	// GetRootID gets the ID of the root node
@@ -31,38 +31,38 @@ type Storage[V any] interface {
 	SetRootID(ctx context.Context, id string) error
 }
 
-var _ Storage[string] = &NodeStorage[string]{}
+var _ Storage = &NodeStorage{}
 
 // NodeStorage adapts the logical.Storage interface to the bptree.Storage interface
-type NodeStorage[V any] struct {
+type NodeStorage struct {
 	prefix         string
-	serializer     NodeSerializer[V]
+	serializer     NodeSerializer
 	storage        logical.Storage
-	cache          *lru.LRU[string, *Node[V]]
+	cache          *lru.LRU[string, *Node]
 	skipCache      bool
 	nodesLock      sync.RWMutex
 	rootLock       sync.RWMutex
-	operationQueue []cacheOperation[V]
+	operationQueue []cacheOperation
 	queueLock      sync.Mutex
 }
 
 // NodeSerializer defines how to serialize and deserialize nodes
-type NodeSerializer[V any] interface {
-	Serialize(node *Node[V]) ([]byte, error)
-	Deserialize(data []byte) (*Node[V], error)
+type NodeSerializer interface {
+	Serialize(node *Node) ([]byte, error)
+	Deserialize(data []byte) (*Node, error)
 }
 
 // JSONSerializer is a simple JSON-based serializer for nodes
-type JSONSerializer[V any] struct{}
+type JSONSerializer struct{}
 
 // Serialize converts a node to JSON
-func (s *JSONSerializer[V]) Serialize(node *Node[V]) ([]byte, error) {
+func (s *JSONSerializer) Serialize(node *Node) ([]byte, error) {
 	return json.Marshal(node)
 }
 
 // Deserialize converts JSON to a node
-func (s *JSONSerializer[V]) Deserialize(data []byte) (*Node[V], error) {
-	var node Node[V]
+func (s *JSONSerializer) Deserialize(data []byte) (*Node, error) {
+	var node Node
 	if err := json.Unmarshal(data, &node); err != nil {
 		return nil, err
 	}
@@ -70,26 +70,26 @@ func (s *JSONSerializer[V]) Deserialize(data []byte) (*Node[V], error) {
 }
 
 // NewNodeStorage creates a new adapter for the logical.Storage interface
-func NewNodeStorage[V any](
+func NewNodeStorage(
 	prefix string,
 	storage logical.Storage,
-	serializer NodeSerializer[V],
+	serializer NodeSerializer,
 	cacheSize int,
-) (*NodeStorage[V], error) {
+) (*NodeStorage, error) {
 	if !strings.HasSuffix(prefix, "/") {
 		prefix = prefix + "/"
 	}
 
 	if serializer == nil {
-		serializer = &JSONSerializer[V]{}
+		serializer = &JSONSerializer{}
 	}
 
-	cache, err := lru.NewLRU[string, *Node[V]](cacheSize)
+	cache, err := lru.NewLRU[string, *Node](cacheSize)
 	if err != nil {
 		return nil, err
 	}
 
-	return &NodeStorage[V]{
+	return &NodeStorage{
 		prefix:     prefix,
 		storage:    storage,
 		serializer: serializer,
@@ -98,7 +98,7 @@ func NewNodeStorage[V any](
 }
 
 // LoadNode loads a node from storage
-func (s *NodeStorage[V]) LoadNode(ctx context.Context, id string) (*Node[V], error) {
+func (s *NodeStorage) LoadNode(ctx context.Context, id string) (*Node, error) {
 	// Lock the nodes
 	s.nodesLock.RLock()
 	defer s.nodesLock.RUnlock()
@@ -131,7 +131,7 @@ func (s *NodeStorage[V]) LoadNode(ctx context.Context, id string) (*Node[V], err
 }
 
 // SaveNode saves a node to storage
-func (s *NodeStorage[V]) SaveNode(ctx context.Context, node *Node[V]) error {
+func (s *NodeStorage) SaveNode(ctx context.Context, node *Node) error {
 	// Check if the node is nil
 	if node == nil {
 		return fmt.Errorf("cannot save nil node")
@@ -163,7 +163,7 @@ func (s *NodeStorage[V]) SaveNode(ctx context.Context, node *Node[V]) error {
 }
 
 // DeleteNode deletes a node from storage
-func (s *NodeStorage[V]) DeleteNode(ctx context.Context, id string) error {
+func (s *NodeStorage) DeleteNode(ctx context.Context, id string) error {
 	// Lock the nodes
 	s.nodesLock.Lock()
 	defer s.nodesLock.Unlock()
@@ -180,7 +180,7 @@ func (s *NodeStorage[V]) DeleteNode(ctx context.Context, id string) error {
 }
 
 // GetRootID gets the ID of the root node
-func (s *NodeStorage[V]) GetRootID(ctx context.Context) (string, error) {
+func (s *NodeStorage) GetRootID(ctx context.Context) (string, error) {
 	// Lock the root
 	s.rootLock.RLock()
 	defer s.rootLock.RUnlock()
@@ -199,7 +199,7 @@ func (s *NodeStorage[V]) GetRootID(ctx context.Context) (string, error) {
 }
 
 // SetRootID sets the ID of the root node
-func (s *NodeStorage[V]) SetRootID(ctx context.Context, id string) error {
+func (s *NodeStorage) SetRootID(ctx context.Context, id string) error {
 	// Lock the root
 	s.rootLock.Lock()
 	defer s.rootLock.Unlock()
@@ -225,18 +225,18 @@ const (
 )
 
 // cacheOperation is a struct to hold the operation type, key, and value
-type cacheOperation[V any] struct {
+type cacheOperation struct {
 	opType cacheOp
 	key    string
-	value  *Node[V]
+	value  *Node
 }
 
 // Add an operation to the queue
-func (s *NodeStorage[V]) queueCacheOperation(opType cacheOp, key string, value *Node[V]) {
+func (s *NodeStorage) queueCacheOperation(opType cacheOp, key string, value *Node) {
 	s.queueLock.Lock()
 	defer s.queueLock.Unlock()
 
-	s.operationQueue = append(s.operationQueue, cacheOperation[V]{
+	s.operationQueue = append(s.operationQueue, cacheOperation{
 		opType: opType,
 		key:    key,
 		value:  value,
@@ -244,7 +244,7 @@ func (s *NodeStorage[V]) queueCacheOperation(opType cacheOp, key string, value *
 }
 
 // Add a method to flush queued operations
-func (s *NodeStorage[V]) flushCacheOperations(apply bool) error {
+func (s *NodeStorage) flushCacheOperations(apply bool) error {
 	s.queueLock.Lock()
 	defer s.queueLock.Unlock()
 
@@ -264,55 +264,55 @@ func (s *NodeStorage[V]) flushCacheOperations(apply bool) error {
 	return nil
 }
 
-type TransactionalNodeStorage[V any] struct {
-	NodeStorage[V]
+type TransactionalNodeStorage struct {
+	NodeStorage
 }
 
-var _ TransactionalStorage[string] = &TransactionalNodeStorage[string]{}
+var _ TransactionalStorage = &TransactionalNodeStorage{}
 
-type NodeTransaction[V any] struct {
-	NodeStorage[V]
+type NodeTransaction struct {
+	NodeStorage
 }
 
-var _ Transaction[string] = &NodeTransaction[string]{}
+var _ Transaction = &NodeTransaction{}
 
-func (s *TransactionalNodeStorage[V]) BeginReadOnlyTx(ctx context.Context) (Transaction[V], error) {
+func (s *TransactionalNodeStorage) BeginReadOnlyTx(ctx context.Context) (Transaction, error) {
 	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return &NodeTransaction[V]{
-		NodeStorage: NodeStorage[V]{
+	return &NodeTransaction{
+		NodeStorage: NodeStorage{
 			storage: tx,
 		},
 	}, nil
 }
 
-func (s *TransactionalNodeStorage[V]) BeginTx(ctx context.Context) (Transaction[V], error) {
+func (s *TransactionalNodeStorage) BeginTx(ctx context.Context) (Transaction, error) {
 	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return &NodeTransaction[V]{
-		NodeStorage: NodeStorage[V]{
+	return &NodeTransaction{
+		NodeStorage: NodeStorage{
 			storage: tx,
 		},
 	}, nil
 }
 
-func (s *NodeTransaction[V]) Commit(ctx context.Context) error {
+func (s *NodeTransaction) Commit(ctx context.Context) error {
 	return s.storage.(logical.Transaction).Commit(ctx)
 }
 
-func (s *NodeTransaction[V]) Rollback(ctx context.Context) error {
+func (s *NodeTransaction) Rollback(ctx context.Context) error {
 	return s.storage.(logical.Transaction).Rollback(ctx)
 }
 
 // WithTransaction will begin and end a transaction around the execution of the `callback` function.
-func WithTransaction[V any](ctx context.Context, originalStorage Storage[V], callback func(Storage[V]) error) error {
-	if txnStorage, ok := originalStorage.(TransactionalStorage[V]); ok {
+func WithTransaction(ctx context.Context, originalStorage Storage, callback func(Storage) error) error {
+	if txnStorage, ok := originalStorage.(TransactionalStorage); ok {
 		txn, err := txnStorage.BeginTx(ctx)
 		if err != nil {
 			return err
