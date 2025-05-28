@@ -12,10 +12,9 @@ import (
 )
 
 const (
-	NodePath      = "nodes"
-	RootPath      = "root"
-	MetadataPath  = "metadata"
-	BPlusTreePath = "bptree"
+	nodesPath    = "nodes"
+	rootPath     = "root"
+	metadataPath = "metadata"
 )
 
 type Storage interface {
@@ -109,7 +108,7 @@ func (s *NodeStorage) LoadNode(ctx context.Context, id string) (*Node, error) {
 	}
 
 	// Load from storage
-	path := s.prefix + NodePath + "/" + id
+	path := s.prefix + nodesPath + "/" + id
 	entry, err := s.storage.Get(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load node %s: %w", id, err)
@@ -146,7 +145,7 @@ func (s *NodeStorage) SaveNode(ctx context.Context, node *Node) error {
 		return fmt.Errorf("failed to serialize node %s: %w", node.ID, err)
 	}
 
-	path := s.prefix + NodePath + "/" + node.ID
+	path := s.prefix + nodesPath + "/" + node.ID
 	entry := &logical.StorageEntry{
 		Key:   path,
 		Value: data,
@@ -168,7 +167,7 @@ func (s *NodeStorage) DeleteNode(ctx context.Context, id string) error {
 	s.nodesLock.Lock()
 	defer s.nodesLock.Unlock()
 
-	path := s.prefix + NodePath + "/" + id
+	path := s.prefix + nodesPath + "/" + id
 	if err := s.storage.Delete(ctx, path); err != nil {
 		return fmt.Errorf("failed to delete node %s: %w", id, err)
 	}
@@ -185,7 +184,7 @@ func (s *NodeStorage) GetRootID(ctx context.Context) (string, error) {
 	s.rootLock.RLock()
 	defer s.rootLock.RUnlock()
 
-	path := s.prefix + MetadataPath + "/" + RootPath
+	path := s.prefix + metadataPath + "/" + rootPath
 	entry, err := s.storage.Get(ctx, path)
 	if err != nil {
 		return "", fmt.Errorf("failed to get root ID: %w", err)
@@ -204,7 +203,7 @@ func (s *NodeStorage) SetRootID(ctx context.Context, id string) error {
 	s.rootLock.Lock()
 	defer s.rootLock.Unlock()
 
-	path := s.prefix + MetadataPath + "/" + RootPath
+	path := s.prefix + metadataPath + "/" + rootPath
 	entry := &logical.StorageEntry{
 		Key:   path,
 		Value: []byte(id),
@@ -264,68 +263,68 @@ func (s *NodeStorage) flushCacheOperations(apply bool) error {
 	return nil
 }
 
-type TransactionalNodeStorage struct {
-	NodeStorage
-}
+// type TransactionalNodeStorage struct {
+// 	NodeStorage
+// }
 
-var _ TransactionalStorage = &TransactionalNodeStorage{}
+// var _ TransactionalStorage = &TransactionalNodeStorage{}
 
-type NodeTransaction struct {
-	NodeStorage
-}
+// type NodeTransaction struct {
+// 	NodeStorage
+// }
 
-var _ Transaction = &NodeTransaction{}
+// var _ Transaction = &NodeTransaction{}
 
-func (s *TransactionalNodeStorage) BeginReadOnlyTx(ctx context.Context) (Transaction, error) {
-	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
-	if err != nil {
-		return nil, err
-	}
+// func (s *TransactionalNodeStorage) BeginReadOnlyTx(ctx context.Context) (Transaction, error) {
+// 	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	return &NodeTransaction{
-		NodeStorage: NodeStorage{
-			storage: tx,
-		},
-	}, nil
-}
+// 	return &NodeTransaction{
+// 		NodeStorage: NodeStorage{
+// 			storage: tx,
+// 		},
+// 	}, nil
+// }
 
-func (s *TransactionalNodeStorage) BeginTx(ctx context.Context) (Transaction, error) {
-	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
-	if err != nil {
-		return nil, err
-	}
+// func (s *TransactionalNodeStorage) BeginTx(ctx context.Context) (Transaction, error) {
+// 	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	return &NodeTransaction{
-		NodeStorage: NodeStorage{
-			storage: tx,
-		},
-	}, nil
-}
+// 	return &NodeTransaction{
+// 		NodeStorage: NodeStorage{
+// 			storage: tx,
+// 		},
+// 	}, nil
+// }
 
-func (s *NodeTransaction) Commit(ctx context.Context) error {
-	return s.storage.(logical.Transaction).Commit(ctx)
-}
+// func (s *NodeTransaction) Commit(ctx context.Context) error {
+// 	return s.storage.(logical.Transaction).Commit(ctx)
+// }
 
-func (s *NodeTransaction) Rollback(ctx context.Context) error {
-	return s.storage.(logical.Transaction).Rollback(ctx)
-}
+// func (s *NodeTransaction) Rollback(ctx context.Context) error {
+// 	return s.storage.(logical.Transaction).Rollback(ctx)
+// }
 
 // WithTransaction will begin and end a transaction around the execution of the `callback` function.
-func WithTransaction(ctx context.Context, originalStorage Storage, callback func(Storage) error) error {
-	if txnStorage, ok := originalStorage.(TransactionalStorage); ok {
-		txn, err := txnStorage.BeginTx(ctx)
-		if err != nil {
-			return err
-		}
-		defer txn.Rollback(ctx)
-		if err := callback(txnStorage); err != nil {
-			return err
-		}
-		if err := txn.Commit(ctx); err != nil {
-			return err
-		}
-	} else {
-		return callback(originalStorage)
-	}
-	return nil
-}
+// func WithTransaction(ctx context.Context, originalStorage Storage, callback func(Storage) error) error {
+// 	if txnStorage, ok := originalStorage.(TransactionalStorage); ok {
+// 		txn, err := txnStorage.BeginTx(ctx)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		defer txn.Rollback(ctx)
+// 		if err := callback(txnStorage); err != nil {
+// 			return err
+// 		}
+// 		if err := txn.Commit(ctx); err != nil {
+// 			return err
+// 		}
+// 	} else {
+// 		return callback(originalStorage)
+// 	}
+// 	return nil
+// }

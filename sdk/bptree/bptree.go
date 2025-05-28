@@ -73,6 +73,7 @@ func (t *BPlusTree) getRoot(ctx context.Context) (*Node, error) {
 	if rootID == "" {
 		return nil, errors.New("root node not found")
 	}
+
 	return t.loadNode(ctx, rootID)
 }
 
@@ -91,9 +92,8 @@ func (t *BPlusTree) isOverfull(node *Node) bool {
 	return len(node.Keys) > t.maxKeys()
 }
 
-// NOTE (gabrielopesantos): Unused for now;
 // isUnderfull checks if a node has fallen below its minimum capacity
-// func (t *BPlusTree[V]) isUnderfull(node *Node[V]) bool {
+// func (t *BPlusTree) isUnderfull(node *Node) bool {
 // 	return len(node.Keys) < t.minKeys()
 // }
 
@@ -105,35 +105,21 @@ func (t *BPlusTree) Get(ctx context.Context, key string) ([]string, bool, error)
 }
 
 func (t *BPlusTree) get(ctx context.Context, key string) ([]string, bool, error) {
-	var values []string
-	var found bool
-	err := WithTransaction(ctx, t.storage, func(s Storage) error {
-		originalStorage := t.storage
-		defer func() {
-			t.storage = originalStorage
-		}()
-		t.storage = s
+	// Load the root node
+	leaf, err := t.findLeafNode(ctx, key)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to find leaf node: %w", err)
+	}
 
-		// Load the root node
-		leaf, err := t.findLeafNode(ctx, key)
-		if err != nil {
-			return fmt.Errorf("failed to find leaf node: %w", err)
-		}
+	// If we get here, we are at a leaf node
+	idx, indexFound := leaf.findKeyIndex(key)
+	if indexFound {
+		// If the key is found, return the values
+		return leaf.Values[idx], true, nil
+	}
 
-		// If we get here, we are at a leaf node
-		idx, indexFound := leaf.findKeyIndex(key)
-		if indexFound {
-			// If the key is found, return the values
-			values = leaf.Values[idx]
-			found = true
-			return nil
-		}
-
-		// Key not found is a valid state, not an error
-		return nil
-	})
-
-	return values, found, err
+	// Key not found is a valid state, not an error
+	return nil, false, nil
 }
 
 // Insert inserts a key-value pair
@@ -141,43 +127,35 @@ func (t *BPlusTree) Insert(ctx context.Context, key string, value string) error 
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	return WithTransaction(ctx, t.storage, func(s Storage) error {
-		originalStorage := t.storage
-		defer func() {
-			t.storage = originalStorage
-		}()
-		t.storage = s
+	leaf, err := t.findLeafNode(ctx, key)
+	if err != nil {
+		return err
+	}
 
-		leaf, err := t.findLeafNode(ctx, key)
-		if err != nil {
-			return err
+	err = t.insertIntoLeaf(leaf, key, value)
+	if err != nil {
+		return err
+	}
+
+	// If the leaf is overfull, we need to split it
+	if t.isOverfull(leaf) {
+		newLeaf, splitKey := t.splitLeafNode(leaf)
+		// Save both leaf nodes after splitting
+		if err := t.storage.SaveNode(ctx, leaf); err != nil { // NOTE:  We do not necessarily need to save them, just cache them somewhere
+			return fmt.Errorf("failed to save original leaf node: %w", err)
 		}
-
-		err = t.insertIntoLeaf(leaf, key, value)
-		if err != nil {
-			return err
+		if err := t.storage.SaveNode(ctx, newLeaf); err != nil {
+			return fmt.Errorf("failed to save new leaf node: %w", err)
 		}
+		return t.insertIntoParent(ctx, leaf, newLeaf, splitKey)
+	}
 
-		// If the leaf is overfull, we need to split it
-		if t.isOverfull(leaf) {
-			newLeaf, splitKey := t.splitLeafNode(leaf)
-			// Save both leaf nodes after splitting
-			if err := t.storage.SaveNode(ctx, leaf); err != nil {
-				return fmt.Errorf("failed to save original leaf node: %w", err)
-			}
-			if err := t.storage.SaveNode(ctx, newLeaf); err != nil {
-				return fmt.Errorf("failed to save new leaf node: %w", err)
-			}
-			return t.insertIntoParent(ctx, leaf, newLeaf, splitKey)
-		}
+	// Save the leaf node after insertion
+	if err := t.storage.SaveNode(ctx, leaf); err != nil {
+		return fmt.Errorf("failed to save leaf node: %w", err)
+	}
 
-		// Save the leaf node after insertion
-		if err := t.storage.SaveNode(ctx, leaf); err != nil {
-			return fmt.Errorf("failed to save leaf node: %w", err)
-		}
-
-		return nil
-	})
+	return nil
 }
 
 // Delete removes all values for a key
@@ -185,37 +163,29 @@ func (t *BPlusTree) Delete(ctx context.Context, key string) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	return WithTransaction(ctx, t.storage, func(s Storage) error {
-		originalStorage := t.storage
-		defer func() {
-			t.storage = originalStorage
-		}()
-		t.storage = s
+	// Find the leaf node where the key belongs
+	leaf, err := t.findLeafNode(ctx, key)
+	if err != nil {
+		return err
+	}
 
-		// Find the leaf node where the key belongs
-		leaf, err := t.findLeafNode(ctx, key)
-		if err != nil {
-			return err
-		}
+	// Check if the key exists in the leaf node
+	idx, found := leaf.findKeyIndex(key)
+	if !found {
+		return ErrKeyNotFound
+	}
 
-		// Check if the key exists in the leaf node
-		idx, found := leaf.findKeyIndex(key)
-		if !found {
-			return ErrKeyNotFound
-		}
+	// Delete the key-value pair
+	leaf.removeKeyValue(idx)
 
-		// Delete the key-value pair
-		leaf.removeKeyValue(idx)
+	// Save the leaf node after deletion
+	if err := t.storage.SaveNode(ctx, leaf); err != nil {
+		return fmt.Errorf("failed to save leaf node: %w", err)
+	}
 
-		// Save the leaf node after deletion
-		if err := t.storage.SaveNode(ctx, leaf); err != nil {
-			return fmt.Errorf("failed to save leaf node: %w", err)
-		}
+	// TODO (gabrielopesantos): Do we really need to handle underflow?
 
-		// TODO (gabrielopesantos): Handle underflow
-
-		return nil
-	})
+	return nil
 }
 
 // Purge removes all keys and values from the tree
@@ -228,50 +198,42 @@ func (t *BPlusTree) DeleteValue(ctx context.Context, key string, value string) e
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	return WithTransaction(ctx, t.storage, func(s Storage) error {
-		originalStorage := t.storage
-		defer func() {
-			t.storage = originalStorage
-		}()
-		t.storage = s
+	leaf, err := t.findLeafNode(ctx, key)
+	if err != nil {
+		return err
+	}
 
-		leaf, err := t.findLeafNode(ctx, key)
-		if err != nil {
-			return err
-		}
+	// Check if the key exists in the leaf node
+	idx, found := leaf.findKeyIndex(key)
+	if !found {
+		return ErrKeyNotFound
+	}
 
-		// Check if the key exists in the leaf node
-		idx, found := leaf.findKeyIndex(key)
-		if !found {
-			return ErrKeyNotFound
-		}
-
-		// Find the value in the slice of values
-		values := leaf.Values[idx]
-		for i, v := range values {
-			if v == value {
-				// Remove the value from the slice
-				values = append(values[:i], values[i+1:]...)
-				if len(values) == 0 {
-					// If no values left, remove the key
-					leaf.removeKeyValue(idx)
-				} else {
-					// Otherwise, update the values
-					leaf.Values[idx] = values
-				}
-
-				// Save the leaf node after deletion
-				if err := t.storage.SaveNode(ctx, leaf); err != nil {
-					return fmt.Errorf("failed to save leaf node: %w", err)
-				}
-
-				return nil
+	// Find the value in the slice of values
+	values := leaf.Values[idx]
+	for i, v := range values {
+		if v == value {
+			// Remove the value from the slice
+			values = slices.Delete(values, i, i+1)
+			if len(values) == 0 {
+				// If no values left, remove the key
+				leaf.removeKeyValue(idx)
+			} else {
+				// Otherwise, update the values
+				leaf.Values[idx] = values
 			}
-		}
 
-		// Value not found
-		return ErrValueNotFound
-	})
+			// Save the leaf node after deletion
+			if err := t.storage.SaveNode(ctx, leaf); err != nil {
+				return fmt.Errorf("failed to save leaf node: %w", err)
+			}
+
+			return nil
+		}
+	}
+
+	// Value not found
+	return ErrValueNotFound
 }
 
 // findLeafNode finds the leaf node where a key belongs
