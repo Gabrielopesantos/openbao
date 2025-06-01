@@ -34,15 +34,15 @@ var _ Storage = &NodeStorage{}
 
 // NodeStorage adapts the logical.Storage interface to the bptree.Storage interface
 type NodeStorage struct {
-	prefix         string
-	serializer     NodeSerializer
-	storage        logical.Storage
-	cache          *lru.LRU[string, *Node]
-	skipCache      bool
-	nodesLock      sync.RWMutex
-	rootLock       sync.RWMutex
-	operationQueue []cacheOperation
-	queueLock      sync.Mutex
+	prefix             string
+	storage            logical.Storage
+	serializer         NodeSerializer
+	skipCache          bool
+	nodesLock          sync.RWMutex
+	rootLock           sync.RWMutex
+	cache              *lru.LRU[string, *Node]
+	pendingCacheOps    []cacheOperation // Operations to be applied on commit
+	cachesOpsQueueLock sync.Mutex
 }
 
 // NodeSerializer defines how to serialize and deserialize nodes
@@ -98,13 +98,15 @@ func NewNodeStorage(
 
 // LoadNode loads a node from storage
 func (s *NodeStorage) LoadNode(ctx context.Context, id string) (*Node, error) {
-	// Lock the nodes
+	// Lock the nodes for reading
 	s.nodesLock.RLock()
 	defer s.nodesLock.RUnlock()
 
-	// Try to get from cache first
-	if node, ok := s.cache.Get(id); ok && !s.skipCache {
-		return node, nil
+	// Try to get from cache first (unless cache is disabled)
+	if !s.skipCache {
+		if node, ok := s.cache.Get(id); ok {
+			return node, nil
+		}
 	}
 
 	// Load from storage
@@ -123,8 +125,10 @@ func (s *NodeStorage) LoadNode(ctx context.Context, id string) (*Node, error) {
 		return nil, fmt.Errorf("failed to deserialize node %s: %w", id, err)
 	}
 
-	// Queue the operation to add to cache
-	s.queueCacheOperation(CacheOpAdd, id, node)
+	// Cache the loaded node (immediate for non-transactional, queued for transactional)
+	if !s.skipCache {
+		s.applyCacheOp(CacheOpAdd, id, node)
+	}
 
 	return node, nil
 }
@@ -136,7 +140,7 @@ func (s *NodeStorage) SaveNode(ctx context.Context, node *Node) error {
 		return fmt.Errorf("cannot save nil node")
 	}
 
-	// Lock storage if the node is not nil
+	// Lock storage for writing
 	s.nodesLock.Lock()
 	defer s.nodesLock.Unlock()
 
@@ -155,15 +159,17 @@ func (s *NodeStorage) SaveNode(ctx context.Context, node *Node) error {
 		return fmt.Errorf("failed to save node %s: %w", node.ID, err)
 	}
 
-	// Queue the operation to add to cache
-	s.queueCacheOperation(CacheOpAdd, node.ID, node)
+	// Cache the saved node (immediate for non-transactional, queued for transactional)
+	if !s.skipCache {
+		s.applyCacheOp(CacheOpAdd, node.ID, node)
+	}
 
-	return err
+	return nil
 }
 
 // DeleteNode deletes a node from storage
 func (s *NodeStorage) DeleteNode(ctx context.Context, id string) error {
-	// Lock the nodes
+	// Lock the nodes for writing
 	s.nodesLock.Lock()
 	defer s.nodesLock.Unlock()
 
@@ -172,8 +178,10 @@ func (s *NodeStorage) DeleteNode(ctx context.Context, id string) error {
 		return fmt.Errorf("failed to delete node %s: %w", id, err)
 	}
 
-	// Queue the operation to delete from cache
-	s.queueCacheOperation(CacheOpDelete, id, nil)
+	// Remove from cache (immediate for non-transactional, queued for transactional)
+	if !s.skipCache {
+		s.applyCacheOp(CacheOpDelete, id, nil)
+	}
 
 	return nil
 }
@@ -230,101 +238,211 @@ type cacheOperation struct {
 	value  *Node
 }
 
-// Add an operation to the queue
-func (s *NodeStorage) queueCacheOperation(opType cacheOp, key string, value *Node) {
-	s.queueLock.Lock()
-	defer s.queueLock.Unlock()
+// queueCacheOp adds an operation to the pending cache operations queue.
+// This allows batching cache operations and applying them only on successful commits.
+func (s *NodeStorage) queueCacheOp(opType cacheOp, key string, value *Node) {
+	s.cachesOpsQueueLock.Lock()
+	defer s.cachesOpsQueueLock.Unlock()
 
-	s.operationQueue = append(s.operationQueue, cacheOperation{
+	s.pendingCacheOps = append(s.pendingCacheOps, cacheOperation{
 		opType: opType,
 		key:    key,
 		value:  value,
 	})
 }
 
-// Add a method to flush queued operations
-func (s *NodeStorage) flushCacheOperations(apply bool) error {
-	s.queueLock.Lock()
-	defer s.queueLock.Unlock()
-
-	if apply {
-		for _, op := range s.operationQueue {
-			switch op.opType {
-			case CacheOpAdd:
-				s.cache.Add(op.key, op.value)
-			case CacheOpDelete:
-				s.cache.Delete(op.key)
+// applyCacheOp applies cache operations immediately if not in a transaction,
+// or queues them if in a transaction context.
+func (s *NodeStorage) applyCacheOp(opType cacheOp, key string, value *Node) {
+	// Check if this is a transaction by seeing if we have a transaction storage type
+	if _, isTransaction := s.storage.(logical.Transaction); isTransaction {
+		// We're in a transaction - queue the operation for later commit/rollback
+		s.queueCacheOp(opType, key, value)
+	} else {
+		// Not in a transaction - apply immediately
+		switch opType {
+		case CacheOpAdd:
+			if value != nil {
+				s.cache.Add(key, value)
 			}
+		case CacheOpDelete:
+			s.cache.Delete(key)
+		}
+	}
+}
+
+// flushCacheOps applies or discards pending cache operations.
+// If apply is true, operations are applied to the cache.
+// If apply is false, operations are discarded (rollback behavior).
+func (s *NodeStorage) flushCacheOps(apply bool) error {
+	s.cachesOpsQueueLock.Lock()
+	defer func() {
+		// Clear the queue after processing
+		s.pendingCacheOps = s.pendingCacheOps[:0]
+		s.cachesOpsQueueLock.Unlock()
+	}()
+
+	if !apply || len(s.pendingCacheOps) == 0 {
+		// Rollback: just clear the queue without applying operations
+		// Or nothing to apply
+		return nil
+	}
+
+	// Apply operations to cache
+	for _, op := range s.pendingCacheOps {
+		switch op.opType {
+		case CacheOpAdd:
+			if op.value != nil {
+				s.cache.Add(op.key, op.value)
+			}
+		case CacheOpDelete:
+			s.cache.Delete(op.key)
 		}
 	}
 
-	// Clear the queue after flushing
-	s.operationQueue = nil
 	return nil
 }
 
-// type TransactionalNodeStorage struct {
-// 	NodeStorage
-// }
+// CacheStats returns information about the current cache state
+func (s *NodeStorage) CacheStats() (size int, pendingOps int) {
+	s.cachesOpsQueueLock.Lock()
+	pendingOps = len(s.pendingCacheOps)
+	s.cachesOpsQueueLock.Unlock()
 
-// var _ TransactionalStorage = &TransactionalNodeStorage{}
+	// For LRU cache, we can get size by iterating or maintain our own counter
+	// For simplicity, return -1 to indicate size is not easily available
+	return -1, pendingOps
+}
 
-// type NodeTransaction struct {
-// 	NodeStorage
-// }
+// EnableCache enables or disables cache operations
+func (s *NodeStorage) EnableCache(enabled bool) {
+	s.skipCache = !enabled
+}
 
-// var _ Transaction = &NodeTransaction{}
+// IsCacheEnabled returns whether cache operations are enabled
+func (s *NodeStorage) IsCacheEnabled() bool {
+	return !s.skipCache
+}
 
-// func (s *TransactionalNodeStorage) BeginReadOnlyTx(ctx context.Context) (Transaction, error) {
-// 	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+// PurgeCache clears all entries from the cache
+func (s *NodeStorage) PurgeCache() {
+	s.cache.Purge()
+}
 
-// 	return &NodeTransaction{
-// 		NodeStorage: NodeStorage{
-// 			storage: tx,
-// 		},
-// 	}, nil
-// }
+type TransactionalNodeStorage struct {
+	NodeStorage
+}
 
-// func (s *TransactionalNodeStorage) BeginTx(ctx context.Context) (Transaction, error) {
-// 	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
-// 	if err != nil {
-// 		return nil, err
-// 	}
+var _ TransactionalStorage = &TransactionalNodeStorage{}
 
-// 	return &NodeTransaction{
-// 		NodeStorage: NodeStorage{
-// 			storage: tx,
-// 		},
-// 	}, nil
-// }
+type NodeTransaction struct {
+	NodeStorage
+}
 
-// func (s *NodeTransaction) Commit(ctx context.Context) error {
-// 	return s.storage.(logical.Transaction).Commit(ctx)
-// }
+var _ Transaction = &NodeTransaction{}
 
-// func (s *NodeTransaction) Rollback(ctx context.Context) error {
-// 	return s.storage.(logical.Transaction).Rollback(ctx)
-// }
+func (s *TransactionalNodeStorage) BeginReadOnlyTx(ctx context.Context) (Transaction, error) {
+	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &NodeTransaction{
+		NodeStorage: NodeStorage{
+			prefix:     s.prefix,
+			storage:    tx,
+			serializer: s.serializer,
+			cache:      s.cache, // Share cache for read-only transactions
+			skipCache:  false,   // Enable cache for read-only transactions
+			// New mutex instances for the transaction (read-only still needs its own locks)
+			nodesLock:          sync.RWMutex{},
+			rootLock:           sync.RWMutex{},
+			cachesOpsQueueLock: sync.Mutex{},
+			pendingCacheOps:    nil, // No cache operations for read-only
+		},
+	}, nil
+}
+
+func (s *TransactionalNodeStorage) BeginTx(ctx context.Context) (Transaction, error) {
+	tx, err := s.storage.(logical.TransactionalStorage).BeginTx(ctx) // Fix: was BeginReadOnlyTx
+	if err != nil {
+		return nil, err
+	}
+
+	return &NodeTransaction{
+		NodeStorage: NodeStorage{
+			prefix:     s.prefix,
+			storage:    tx,
+			serializer: s.serializer,
+			// NOTE (gsantos): Isolated cache per transaction?
+			cache:     s.cache,
+			skipCache: false, // Enable cache within transaction
+			// New mutex instances for the transaction
+			nodesLock:          sync.RWMutex{},
+			rootLock:           sync.RWMutex{},
+			cachesOpsQueueLock: sync.Mutex{},
+			pendingCacheOps:    make([]cacheOperation, 0),
+		},
+	}, nil
+}
+
+func (s *NodeTransaction) Commit(ctx context.Context) error {
+	// Commit the underlying transaction first
+	if err := s.storage.(logical.Transaction).Commit(ctx); err != nil {
+		// If commit fails, clear any pending cache operations
+		s.flushCacheOps(false)
+		return err
+	}
+
+	// If underlying commit succeeds, apply pending cache operations
+	if err := s.flushCacheOps(true); err != nil {
+		// Log error but don't fail the transaction since storage commit succeeded
+		// This is a cache consistency issue, not a data integrity issue
+		return fmt.Errorf("transaction committed but cache update failed: %w", err)
+	}
+
+	return nil
+}
+
+func (s *NodeTransaction) Rollback(ctx context.Context) error {
+	// Clear any pending cache operations (don't apply them)
+	s.flushCacheOps(false)
+
+	// Rollback the underlying transaction
+	return s.storage.(logical.Transaction).Rollback(ctx)
+}
 
 // WithTransaction will begin and end a transaction around the execution of the `callback` function.
-// func WithTransaction(ctx context.Context, originalStorage Storage, callback func(Storage) error) error {
-// 	if txnStorage, ok := originalStorage.(TransactionalStorage); ok {
-// 		txn, err := txnStorage.BeginTx(ctx)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		defer txn.Rollback(ctx)
-// 		if err := callback(txnStorage); err != nil {
-// 			return err
-// 		}
-// 		if err := txn.Commit(ctx); err != nil {
-// 			return err
-// 		}
-// 	} else {
-// 		return callback(originalStorage)
-// 	}
-// 	return nil
-// }
+// If the storage supports transactions, it creates a transaction and passes it to the callback.
+// On success, the transaction is committed; on failure, it's rolled back.
+func WithTransaction(ctx context.Context, originalStorage Storage, callback func(Storage) error) error {
+	if txnStorage, ok := originalStorage.(TransactionalStorage); ok {
+		txn, err := txnStorage.BeginTx(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+
+		// Ensure rollback is called if commit is not reached
+		defer func() {
+			if rollbackErr := txn.Rollback(ctx); rollbackErr != nil {
+				// Log rollback errors but don't override the main error
+				// In production, you might want to use a proper logger here
+			}
+		}()
+
+		// Execute the callback with the transaction storage
+		if err := callback(txn); err != nil {
+			return err
+		}
+
+		// Commit the transaction
+		if err := txn.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
+
+		return nil
+	} else {
+		// If storage doesn't support transactions, execute directly
+		return callback(originalStorage)
+	}
+}

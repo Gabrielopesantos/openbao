@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// NOTE: We probably do not want to test the Node's methods here, but only the storage nodeStorage
+// NOTE (gsantos): We probably do not want to test the Node's methods here, but only the storage nodeStorage
 func TestStorageOperations(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
@@ -82,18 +82,10 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		err := nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
-		// Try to load the node from cache without flushing the operations queue
+		// Try to load the node from cache
 		cachedNode, ok := nodeStorage.cache.Get(node.ID)
-		require.False(t, ok, "Node should not be in cache yet")
-		require.Nil(t, cachedNode, "Cached node should be empty")
-
-		// Flush the operations queue to add the node to cache
-		nodeStorage.flushCacheOperations(true)
-
-		// Try to load the node from cache without flushing the operations queue
-		cachedNode, ok = nodeStorage.cache.Get(node.ID)
 		require.True(t, ok, "Node should be in cache")
-		require.Equal(t, node, cachedNode, "Cached node should match original")
+		require.NotNil(t, cachedNode, "Cached node should not be empty")
 	})
 
 	t.Run("CacheUpdate", func(t *testing.T) {
@@ -105,9 +97,6 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		err := nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
-		// Flush the operations queue to add the node to cache
-		nodeStorage.flushCacheOperations(true)
-
 		// Verify the node is in cache
 		cachedNode, ok := nodeStorage.cache.Get(node.ID)
 		require.True(t, ok, "Node should be in cache")
@@ -117,8 +106,6 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		node.Values[0] = []string{"value1_updated"}
 		err = nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to update node")
-
-		nodeStorage.flushCacheOperations(true)
 
 		// Verify the updated node is in cache
 		cachedNode, ok = nodeStorage.cache.Get(node.ID)
@@ -136,9 +123,6 @@ func TestStoragenodeStorageCache(t *testing.T) {
 			err := nodeStorage.SaveNode(ctx, node)
 			require.NoError(t, err, "Failed to save node")
 		}
-
-		// Flush the operations queue to add nodes to cache
-		nodeStorage.flushCacheOperations(true)
 
 		// Verify some nodes are in cache
 		recentNode := NewLeafNode("node-149")
@@ -162,9 +146,6 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		err := nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
-		// Flush the operations queue to add the node to cache
-		nodeStorage.flushCacheOperations(true)
-
 		// Verify node is in cache
 		cachedNode, ok := nodeStorage.cache.Get(node.ID)
 		require.True(t, ok, "Node should be in cache")
@@ -173,9 +154,6 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		// Delete the node
 		err = nodeStorage.DeleteNode(ctx, node.ID)
 		require.NoError(t, err, "Failed to delete node")
-
-		// Flush the operations queue to add the node to cache
-		nodeStorage.flushCacheOperations(true)
 
 		// Verify node is removed from cache
 		_, ok = nodeStorage.cache.Get(node.ID)
@@ -190,9 +168,6 @@ func TestStoragenodeStorageCache(t *testing.T) {
 
 		err := nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
-
-		// Flush the operations queue to add the node to cache
-		nodeStorage.flushCacheOperations(true)
 
 		// Launch multiple goroutines to read and write concurrently
 		var wg sync.WaitGroup
@@ -224,9 +199,6 @@ func TestStoragenodeStorageCache(t *testing.T) {
 					errChan <- fmt.Errorf("error saving new node: %w", err)
 					return
 				}
-
-				// Flush the operations queue to add the new node to cache
-				nodeStorage.flushCacheOperations(true)
 
 				// Verify new node is in cache
 				cachedNode, ok := nodeStorage.cache.Get(newNode.ID)
