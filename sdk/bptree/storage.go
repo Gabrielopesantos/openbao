@@ -28,6 +28,8 @@ type Storage interface {
 	GetRootID(ctx context.Context) (string, error)
 	// SetRootID sets the ID of the root node
 	SetRootID(ctx context.Context, id string) error
+	// PurgeNodes clears all nodes from storage starting with the prefix
+	// PurgeNodes(ctx context.Context) error
 }
 
 var _ Storage = &NodeStorage{}
@@ -37,9 +39,9 @@ type NodeStorage struct {
 	prefix             string
 	storage            logical.Storage
 	serializer         NodeSerializer
-	skipCache          bool
 	nodesLock          sync.RWMutex
 	rootLock           sync.RWMutex
+	skipCache          bool
 	cache              *lru.LRU[string, *Node]
 	pendingCacheOps    []cacheOperation // Operations to be applied on commit
 	cachesOpsQueueLock sync.Mutex
@@ -94,6 +96,30 @@ func NewNodeStorage(
 		serializer: serializer,
 		cache:      cache,
 	}, nil
+}
+
+// NewTransactionalNodeStorage creates a new transactional adapter for the logical.Storage interface
+// if the underlying storage supports transactions. Otherwise, it returns a regular NodeStorage.
+func NewTransactionalNodeStorage(
+	prefix string,
+	storage logical.Storage,
+	serializer NodeSerializer,
+	cacheSize int,
+) (Storage, error) {
+	nodeStorage, err := NewNodeStorage(prefix, storage, serializer, cacheSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if the underlying storage supports transactions
+	if _, ok := storage.(logical.TransactionalStorage); ok {
+		return &TransactionalNodeStorage{
+			NodeStorage: nodeStorage,
+		}, nil
+	}
+
+	// Return regular NodeStorage if transactions not supported
+	return nodeStorage, nil
 }
 
 // LoadNode loads a node from storage
@@ -309,9 +335,11 @@ func (s *NodeStorage) CacheStats() (size int, pendingOps int) {
 	pendingOps = len(s.pendingCacheOps)
 	s.cachesOpsQueueLock.Unlock()
 
-	// For LRU cache, we can get size by iterating or maintain our own counter
-	// For simplicity, return -1 to indicate size is not easily available
-	return -1, pendingOps
+	// Return the configured cache size
+	if s.cache != nil {
+		return s.cache.Size(), pendingOps
+	}
+	return 0, pendingOps
 }
 
 // EnableCache enables or disables cache operations
@@ -330,13 +358,13 @@ func (s *NodeStorage) PurgeCache() {
 }
 
 type TransactionalNodeStorage struct {
-	NodeStorage
+	*NodeStorage
 }
 
 var _ TransactionalStorage = &TransactionalNodeStorage{}
 
 type NodeTransaction struct {
-	NodeStorage
+	*NodeStorage
 }
 
 var _ Transaction = &NodeTransaction{}
@@ -348,7 +376,7 @@ func (s *TransactionalNodeStorage) BeginReadOnlyTx(ctx context.Context) (Transac
 	}
 
 	return &NodeTransaction{
-		NodeStorage: NodeStorage{
+		NodeStorage: &NodeStorage{
 			prefix:     s.prefix,
 			storage:    tx,
 			serializer: s.serializer,
@@ -370,13 +398,12 @@ func (s *TransactionalNodeStorage) BeginTx(ctx context.Context) (Transaction, er
 	}
 
 	return &NodeTransaction{
-		NodeStorage: NodeStorage{
+		NodeStorage: &NodeStorage{
 			prefix:     s.prefix,
 			storage:    tx,
 			serializer: s.serializer,
-			// NOTE (gsantos): Isolated cache per transaction?
-			cache:     s.cache,
-			skipCache: false, // Enable cache within transaction
+			cache:      s.cache, // Share cache within transactions
+			skipCache:  false,   // Enable cache within transactions
 			// New mutex instances for the transaction
 			nodesLock:          sync.RWMutex{},
 			rootLock:           sync.RWMutex{},
@@ -387,18 +414,12 @@ func (s *TransactionalNodeStorage) BeginTx(ctx context.Context) (Transaction, er
 }
 
 func (s *NodeTransaction) Commit(ctx context.Context) error {
-	// Commit the underlying transaction first
-	if err := s.storage.(logical.Transaction).Commit(ctx); err != nil {
-		// If commit fails, clear any pending cache operations
-		s.flushCacheOps(false)
-		return err
-	}
+	var err error
+	defer s.flushCacheOps(err == nil) // Ensure cache operations are flushed on commit
 
-	// If underlying commit succeeds, apply pending cache operations
-	if err := s.flushCacheOps(true); err != nil {
-		// Log error but don't fail the transaction since storage commit succeeded
-		// This is a cache consistency issue, not a data integrity issue
-		return fmt.Errorf("transaction committed but cache update failed: %w", err)
+	// Commit the underlying transaction first
+	if err = s.storage.(logical.Transaction).Commit(ctx); err != nil {
+		return err
 	}
 
 	return nil
