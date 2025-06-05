@@ -686,3 +686,531 @@ func TestBPlusTreeDuplicateValues(t *testing.T) {
 	require.Contains(t, values, "value2")
 	require.Contains(t, values, "value3")
 }
+
+// TestNextIDLinking tests that the NextID field is properly set during leaf operations
+func TestNextIDLinking(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	storage, err := NewNodeStorage("bptree_nextid", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
+
+	// Use a small order to force splits
+	tree, err := NewBPlusTree(ctx, 2, storage)
+	require.NoError(t, err, "Failed to create B+ tree")
+
+	t.Run("SingleLeafNode", func(t *testing.T) {
+		// Insert into root leaf - should have empty NextID initially
+		err = tree.Insert(ctx, storage, "key1", "value1")
+		require.NoError(t, err, "Failed to insert key1")
+
+		root, err := tree.getRoot(ctx, storage)
+		require.NoError(t, err, "Failed to get root")
+		require.True(t, root.IsLeaf, "Root should be a leaf")
+		require.Empty(t, root.NextID, "Single leaf should have empty NextID")
+	})
+
+	t.Run("LeafSplitCreatesTwoLinkedLeaves", func(t *testing.T) {
+		// Insert more keys to force a leaf split
+		err = tree.Insert(ctx, storage, "key2", "value2")
+		require.NoError(t, err, "Failed to insert key2")
+
+		// This should cause a leaf split (order=2, so max 2 keys per leaf)
+		err = tree.Insert(ctx, storage, "key3", "value3")
+		require.NoError(t, err, "Failed to insert key3")
+
+		// Find the leftmost leaf
+		leftmost, err := tree.findLeftmostLeaf(ctx, storage)
+		require.NoError(t, err, "Failed to find leftmost leaf")
+
+		// Verify the leaf has a NextID
+		require.NotEmpty(t, leftmost.NextID, "Leftmost leaf should have NextID after split")
+
+		// Load the next leaf
+		rightLeaf, err := storage.LoadNode(ctx, leftmost.NextID)
+		require.NoError(t, err, "Failed to load right leaf")
+		require.True(t, rightLeaf.IsLeaf, "Next node should be a leaf")
+
+		// The rightmost leaf should have empty NextID
+		require.Empty(t, rightLeaf.NextID, "Rightmost leaf should have empty NextID")
+
+		// Verify keys are properly distributed
+		allKeys := append(leftmost.Keys, rightLeaf.Keys...)
+		require.ElementsMatch(t, []string{"key1", "key2", "key3"}, allKeys, "All keys should be present across leaves")
+	})
+
+	t.Run("SequentialTraversalWorks", func(t *testing.T) {
+		// Insert more keys to create multiple leaf splits
+		for i := 4; i <= 10; i++ {
+			err = tree.Insert(ctx, storage, "key"+string(rune('0'+i)), "value"+string(rune('0'+i)))
+			require.NoError(t, err, "Failed to insert key%d", i)
+		}
+
+		// Traverse through all leaves using NextID
+		var allKeys []string
+		current, err := tree.findLeftmostLeaf(ctx, storage)
+		require.NoError(t, err, "Failed to find leftmost leaf")
+
+		for current != nil {
+			allKeys = append(allKeys, current.Keys...)
+			if current.NextID == "" {
+				break
+			}
+			current, err = storage.LoadNode(ctx, current.NextID)
+			require.NoError(t, err, "Failed to load next leaf")
+		}
+
+		// Verify all keys are present and in order
+		expectedKeys := []string{"key1", "key2", "key3", "key4", "key5", "key6", "key7", "key8", "key9", "key:"}
+		require.Equal(t, expectedKeys, allKeys, "Keys should be in sorted order through leaf traversal")
+	})
+}
+
+// TestSearchPrefix tests the SearchPrefix functionality
+func TestSearchPrefix(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	storage, err := NewNodeStorage("bptree_prefix", s, nil, 100)
+	require.NoError(t, err, "Failed to create storage adapter")
+
+	tree, err := NewBPlusTree(ctx, 4, storage)
+	require.NoError(t, err, "Failed to create B+ tree")
+
+	// Insert keys with various prefixes
+	keys := []string{
+		"app/config/db",
+		"app/config/redis",
+		"app/secrets/api_key",
+		"app/secrets/jwt_secret",
+		"auth/users/alice",
+		"auth/users/bob",
+		"auth/roles/admin",
+		"system/health",
+		"system/version",
+	}
+
+	for _, key := range keys {
+		err = tree.Insert(ctx, storage, key, "value_"+key)
+		require.NoError(t, err, "Failed to insert %s", key)
+	}
+
+	// Test basic prefix search
+	results, err := tree.SearchPrefix(ctx, storage, "app/")
+	require.NoError(t, err, "SearchPrefix failed")
+	require.Len(t, results, 4, "Should find 4 keys with 'app/' prefix")
+	require.Contains(t, results, "app/config/db")
+	require.Contains(t, results, "app/config/redis")
+	require.Contains(t, results, "app/secrets/api_key")
+	require.Contains(t, results, "app/secrets/jwt_secret")
+
+	// Test more specific prefix
+	results, err = tree.SearchPrefix(ctx, storage, "app/config/")
+	require.NoError(t, err, "SearchPrefix failed")
+	require.Len(t, results, 2, "Should find 2 keys with 'app/config/' prefix")
+	require.Contains(t, results, "app/config/db")
+	require.Contains(t, results, "app/config/redis")
+
+	// Test prefix with no matches
+	results, err = tree.SearchPrefix(ctx, storage, "nonexistent/")
+	require.NoError(t, err, "SearchPrefix should not fail on non-existent prefix")
+	require.Empty(t, results, "Non-existent prefix should return empty results")
+
+	// Test exact key as prefix
+	results, err = tree.SearchPrefix(ctx, storage, "system")
+	require.NoError(t, err, "SearchPrefix failed")
+	require.Len(t, results, 2, "Should find keys starting with 'system'")
+	require.Contains(t, results, "system/health")
+	require.Contains(t, results, "system/version")
+}
+
+// TestSearchPrefixEdgeCases tests various edge cases for the SearchPrefix functionality
+func TestSearchPrefixEdgeCases(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("EmptyTree", func(t *testing.T) {
+		s := &logical.InmemStorage{}
+		storage, err := NewNodeStorage("bptree_empty", s, nil, 100)
+		require.NoError(t, err)
+
+		tree, err := NewBPlusTree(ctx, 4, storage)
+		require.NoError(t, err)
+
+		// Search in empty tree
+		results, err := tree.SearchPrefix(ctx, storage, "any/prefix")
+		require.NoError(t, err, "SearchPrefix should not fail on empty tree")
+		require.Empty(t, results, "Empty tree should return empty results")
+
+		// Empty prefix on empty tree
+		results, err = tree.SearchPrefix(ctx, storage, "")
+		require.NoError(t, err, "Empty prefix on empty tree should not fail")
+		require.Empty(t, results, "Empty prefix should return empty results")
+	})
+
+	t.Run("EmptyPrefixOnNonEmptyTree", func(t *testing.T) {
+		s := &logical.InmemStorage{}
+		storage, err := NewNodeStorage("bptree_empty_prefix", s, nil, 100)
+		require.NoError(t, err)
+
+		tree, err := NewBPlusTree(ctx, 4, storage)
+		require.NoError(t, err)
+
+		// Insert some keys
+		keys := []string{"app/config", "auth/users", "system/health"}
+		for _, key := range keys {
+			err = tree.Insert(ctx, storage, key, "value_"+key)
+			require.NoError(t, err)
+		}
+
+		// Empty prefix should return empty results, not all keys
+		results, err := tree.SearchPrefix(ctx, storage, "")
+		require.NoError(t, err, "Empty prefix should not fail")
+		require.Empty(t, results, "Empty prefix should return empty results for security/performance reasons")
+	})
+
+	t.Run("SpecialCharactersInPrefix", func(t *testing.T) {
+		s := &logical.InmemStorage{}
+		storage, err := NewNodeStorage("bptree_special_chars", s, nil, 100)
+		require.NoError(t, err)
+
+		tree, err := NewBPlusTree(ctx, 4, storage)
+		require.NoError(t, err)
+
+		// Insert keys with special characters
+		specialKeys := []string{
+			"app/config-dev",
+			"app/config_prod",
+			"app/config.test",
+			"app/config@staging",
+			"app/config+backup",
+			"app/config (legacy)",
+			"app/config/with spaces",
+			"app/config/with/unicode/🔑",
+		}
+
+		for _, key := range specialKeys {
+			err = tree.Insert(ctx, storage, key, "value_"+key)
+			require.NoError(t, err, "Failed to insert key with special chars: %s", key)
+		}
+
+		// Test prefix search with special characters
+		results, err := tree.SearchPrefix(ctx, storage, "app/config-")
+		require.NoError(t, err)
+		require.Contains(t, results, "app/config-dev")
+		require.NotContains(t, results, "app/config_prod")
+
+		results, err = tree.SearchPrefix(ctx, storage, "app/config_")
+		require.NoError(t, err)
+		require.Contains(t, results, "app/config_prod")
+		require.NotContains(t, results, "app/config-dev")
+
+		// Test with Unicode
+		results, err = tree.SearchPrefix(ctx, storage, "app/config/with/unicode/")
+		require.NoError(t, err)
+		require.Contains(t, results, "app/config/with/unicode/🔑")
+	})
+
+	t.Run("PrefixLongerThanAnyKey", func(t *testing.T) {
+		s := &logical.InmemStorage{}
+		storage, err := NewNodeStorage("bptree_long_prefix_no_match", s, nil, 100)
+		require.NoError(t, err)
+
+		tree, err := NewBPlusTree(ctx, 4, storage)
+		require.NoError(t, err)
+
+		// Insert short keys
+		err = tree.Insert(ctx, storage, "a", "value1")
+		require.NoError(t, err)
+		err = tree.Insert(ctx, storage, "ab", "value2")
+		require.NoError(t, err)
+		err = tree.Insert(ctx, storage, "abc", "value3")
+		require.NoError(t, err)
+
+		// Search with prefix longer than any key
+		results, err := tree.SearchPrefix(ctx, storage, "abcdefghijklmnop")
+		require.NoError(t, err)
+		require.Empty(t, results, "Prefix longer than any key should return empty results")
+	})
+
+	t.Run("PrefixEqualsExactKey", func(t *testing.T) {
+		s := &logical.InmemStorage{}
+		storage, err := NewNodeStorage("bptree_exact_match", s, nil, 100)
+		require.NoError(t, err)
+
+		tree, err := NewBPlusTree(ctx, 4, storage)
+		require.NoError(t, err)
+
+		// Insert keys where one exactly matches our search prefix
+		err = tree.Insert(ctx, storage, "app/config", "exact_match")
+		require.NoError(t, err)
+		err = tree.Insert(ctx, storage, "app/config/db", "sub_key1")
+		require.NoError(t, err)
+		err = tree.Insert(ctx, storage, "app/config/redis", "sub_key2")
+		require.NoError(t, err)
+		err = tree.Insert(ctx, storage, "app/configure", "different_key")
+		require.NoError(t, err)
+
+		// Search with prefix that exactly matches one key
+		results, err := tree.SearchPrefix(ctx, storage, "app/config")
+		require.NoError(t, err)
+		require.Len(t, results, 4, "Should find exact match and keys with same prefix")
+		require.Contains(t, results, "app/config")
+		require.Contains(t, results, "app/config/db")
+		require.Contains(t, results, "app/config/redis")
+		require.Contains(t, results, "app/configure")
+	})
+
+	t.Run("CaseSensitivity", func(t *testing.T) {
+		s := &logical.InmemStorage{}
+		storage, err := NewNodeStorage("bptree_case_sensitive", s, nil, 100)
+		require.NoError(t, err)
+
+		tree, err := NewBPlusTree(ctx, 4, storage)
+		require.NoError(t, err)
+
+		// Insert keys with different cases
+		err = tree.Insert(ctx, storage, "App/Config", "mixed_case")
+		require.NoError(t, err)
+		err = tree.Insert(ctx, storage, "app/config", "lower_case")
+		require.NoError(t, err)
+		err = tree.Insert(ctx, storage, "APP/CONFIG", "upper_case")
+		require.NoError(t, err)
+
+		// Search should be case sensitive
+		results, err := tree.SearchPrefix(ctx, storage, "app/")
+		require.NoError(t, err)
+		require.Contains(t, results, "app/config")
+		require.NotContains(t, results, "App/Config")
+		require.NotContains(t, results, "APP/CONFIG")
+
+		results, err = tree.SearchPrefix(ctx, storage, "App/")
+		require.NoError(t, err)
+		require.Contains(t, results, "App/Config")
+		require.NotContains(t, results, "app/config")
+		require.NotContains(t, results, "APP/CONFIG")
+	})
+}
+
+// TestSearchPrefixOptimizations tests the optimization cases where we avoid tree traversal
+func TestSearchPrefixOptimizations(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	storage, err := NewNodeStorage("bptree_optimizations", s, nil, 100)
+	require.NoError(t, err)
+
+	tree, err := NewBPlusTree(ctx, 4, storage)
+	require.NoError(t, err)
+
+	// Insert test data in sorted order
+	keys := []string{
+		"app/config/db",
+		"app/config/redis",
+		"app/secrets/api",
+		"auth/users/alice",
+		"auth/users/bob",
+		"system/health",
+		"system/version",
+	}
+
+	for _, key := range keys {
+		err = tree.Insert(ctx, storage, key, "value_"+key)
+		require.NoError(t, err)
+	}
+
+	t.Run("PrefixLargerThanLargestKey", func(t *testing.T) {
+		// Prefix "zzz" is larger than "system/version" (largest key)
+		results, err := tree.SearchPrefix(ctx, storage, "zzz")
+		require.NoError(t, err)
+		require.Empty(t, results, "Prefix larger than largest key should return empty")
+	})
+
+	t.Run("PrefixSmallerThanSmallestKeyNoMatch", func(t *testing.T) {
+		// Prefix "aaa" where calculatePrefixLimit("aaa") = "aab"
+		// "aab" < "app/config/db" and "app/config/db" doesn't start with "aaa"
+		results, err := tree.SearchPrefix(ctx, storage, "aaa")
+		require.NoError(t, err)
+		require.Empty(t, results, "Prefix smaller than smallest key with no match should return empty")
+	})
+
+	t.Run("EarlyTerminationOptimization", func(t *testing.T) {
+		// Search for "app/" should find matches and stop at "auth/" keys
+		// because "auth/" >= calculatePrefixLimit("app/") = "apq"
+		results, err := tree.SearchPrefix(ctx, storage, "app/")
+		require.NoError(t, err)
+		require.Len(t, results, 3, "Should find exactly 3 'app/' matches")
+		require.Contains(t, results, "app/config/db")
+		require.Contains(t, results, "app/config/redis")
+		require.Contains(t, results, "app/secrets/api")
+		require.NotContains(t, results, "auth/users/alice")
+	})
+
+	t.Run("EmptyTreeOptimization", func(t *testing.T) {
+		emptyStorage, err := NewNodeStorage("bptree_empty_opt", s, nil, 100)
+		require.NoError(t, err)
+
+		emptyTree, err := NewBPlusTree(ctx, 4, emptyStorage)
+		require.NoError(t, err)
+
+		results, err := emptyTree.SearchPrefix(ctx, emptyStorage, "any/prefix")
+		require.NoError(t, err)
+		require.Empty(t, results, "Empty tree should return empty results immediately")
+	})
+
+	t.Run("PrefixEqualsLargestKey", func(t *testing.T) {
+		// Edge case: prefix equals the largest key
+		results, err := tree.SearchPrefix(ctx, storage, "system/version")
+		require.NoError(t, err)
+		require.Contains(t, results, "system/version")
+	})
+
+	t.Run("SingleCharacterOptimizations", func(t *testing.T) {
+		// Single character prefixes should work efficiently
+		results, err := tree.SearchPrefix(ctx, storage, "s")
+		require.NoError(t, err)
+		require.Len(t, results, 2, "Should find 'system/' keys")
+		require.Contains(t, results, "system/health")
+		require.Contains(t, results, "system/version")
+
+		results, err = tree.SearchPrefix(ctx, storage, "a")
+		require.NoError(t, err)
+		require.Len(t, results, 5, "Should find 'app/' and 'auth/' keys")
+	})
+}
+
+// TestSearchPrefixWithNextIDTraversal tests that SearchPrefix properly uses NextID for traversal
+func TestSearchPrefixWithNextIDTraversal(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	storage, err := NewNodeStorage("bptree_nextid_traversal", s, nil, 100)
+	require.NoError(t, err)
+
+	// Use very small order to force many splits and multiple leaf nodes
+	tree, err := NewBPlusTree(ctx, 3, storage)
+	require.NoError(t, err)
+
+	// Insert many keys to create multiple leaf nodes
+	numKeys := 20
+	for i := 1; i <= numKeys; i++ {
+		key := fmt.Sprintf("key%02d", i) // key01, key02, ..., key20
+		value := fmt.Sprintf("value%02d", i)
+		err = tree.Insert(ctx, storage, key, value)
+		require.NoError(t, err, "Failed to insert %s", key)
+	}
+
+	// Verify we have multiple leaves by checking NextID chain
+	var leafCount int
+	current, err := tree.findLeftmostLeaf(ctx, storage)
+	require.NoError(t, err)
+
+	for current != nil {
+		leafCount++
+		if current.NextID == "" {
+			break
+		}
+		current, err = storage.LoadNode(ctx, current.NextID)
+		require.NoError(t, err)
+	}
+
+	require.GreaterOrEqual(t, leafCount, 2, "Should have created multiple leaves")
+
+	// Test prefix search that spans multiple leaves
+	results, err := tree.SearchPrefix(ctx, storage, "key")
+	require.NoError(t, err)
+	require.Len(t, results, numKeys, "Should find all keys with 'key' prefix")
+
+	// Test more specific prefix that might span leaves
+	results, err = tree.SearchPrefix(ctx, storage, "key1")
+	require.NoError(t, err)
+	expectedKey1Results := []string{"key10", "key11", "key12", "key13", "key14", "key15", "key16", "key17", "key18", "key19"}
+	require.Len(t, results, len(expectedKey1Results), "Should find all 'key1*' matches")
+
+	for _, expectedKey := range expectedKey1Results {
+		require.Contains(t, results, expectedKey, "Should contain %s", expectedKey)
+	}
+}
+
+// TestSearchPrefixComprehensive is a comprehensive test that demonstrates all functionality
+func TestSearchPrefixComprehensive(t *testing.T) {
+	ctx := context.Background()
+	s := &logical.InmemStorage{}
+	storage, err := NewNodeStorage("bptree_comprehensive", s, nil, 100)
+	require.NoError(t, err)
+
+	tree, err := NewBPlusTree(ctx, 4, storage)
+	require.NoError(t, err)
+
+	// Insert comprehensive test data
+	testData := map[string]string{
+		"app/config/db":       "database_config",
+		"app/config/redis":    "redis_config",
+		"app/secrets/api_key": "secret_api_key",
+		"app/secrets/jwt":     "jwt_secret",
+		"auth/users/alice":    "user_alice",
+		"auth/users/bob":      "user_bob",
+		"auth/roles/admin":    "admin_role",
+		"auth/roles/user":     "user_role",
+		"system/health":       "health_check",
+		"system/version":      "version_info",
+		"logs/app/error":      "error_logs",
+		"logs/app/info":       "info_logs",
+		"logs/system/debug":   "debug_logs",
+	}
+
+	for key, value := range testData {
+		err = tree.Insert(ctx, storage, key, value)
+		require.NoError(t, err, "Failed to insert %s", key)
+	}
+
+	// Test various prefix searches
+	testCases := []struct {
+		prefix           string
+		expectedCount    int
+		shouldContain    []string
+		shouldNotContain []string
+	}{
+		{
+			prefix:        "app/",
+			expectedCount: 4,
+			shouldContain: []string{"app/config/db", "app/config/redis", "app/secrets/api_key", "app/secrets/jwt"},
+		},
+		{
+			prefix:           "app/config/",
+			expectedCount:    2,
+			shouldContain:    []string{"app/config/db", "app/config/redis"},
+			shouldNotContain: []string{"app/secrets/api_key"},
+		},
+		{
+			prefix:        "auth/",
+			expectedCount: 4,
+			shouldContain: []string{"auth/users/alice", "auth/users/bob", "auth/roles/admin", "auth/roles/user"},
+		},
+		{
+			prefix:        "logs/",
+			expectedCount: 3,
+			shouldContain: []string{"logs/app/error", "logs/app/info", "logs/system/debug"},
+		},
+		{
+			prefix:        "nonexistent/",
+			expectedCount: 0,
+		},
+		{
+			prefix:        "",
+			expectedCount: 0, // Empty prefix returns empty results
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("Prefix_%s", tc.prefix), func(t *testing.T) {
+			results, err := tree.SearchPrefix(ctx, storage, tc.prefix)
+			require.NoError(t, err, "SearchPrefix failed for prefix: %s", tc.prefix)
+			require.Len(t, results, tc.expectedCount, "Wrong result count for prefix: %s", tc.prefix)
+
+			for _, key := range tc.shouldContain {
+				require.Contains(t, results, key, "Should contain %s for prefix %s", key, tc.prefix)
+				require.Equal(t, testData[key], results[key][0], "Wrong value for key %s", key)
+			}
+
+			for _, key := range tc.shouldNotContain {
+				require.NotContains(t, results, key, "Should not contain %s for prefix %s", key, tc.prefix)
+			}
+		})
+	}
+}

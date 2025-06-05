@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -99,7 +100,95 @@ func (t *BPlusTree) isOverfull(node *Node) bool {
 func (t *BPlusTree) Get(ctx context.Context, storage Storage, key string) ([]string, bool, error) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
+
 	return t.get(ctx, storage, key)
+}
+
+// SearchPrefix returns all key-value pairs that start with the given prefix
+// This function leverages the NextID linking to efficiently traverse leaf nodes sequentially
+func (t *BPlusTree) SearchPrefix(ctx context.Context, storage Storage, prefix string) (map[string][]string, error) {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	results := make(map[string][]string)
+
+	// Handle empty prefix - we don't allow this as it would return all keys which is expensive
+	if prefix == "" {
+		return results, nil // Return empty results for empty prefix
+	}
+
+	// Check if prefix is larger than any possible key
+	// by comparing with the rightmost (largest) key in the tree
+	rightmostLeaf, err := t.findRightmostLeaf(ctx, storage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find rightmost leaf: %w", err)
+	}
+
+	// If tree is empty (rightmost leaf has no keys), return empty result
+	if len(rightmostLeaf.Keys) == 0 {
+		return results, nil
+	}
+
+	// If prefix is lexicographically greater than the largest key, no matches possible
+	largestKey := rightmostLeaf.Keys[len(rightmostLeaf.Keys)-1]
+	if prefix > largestKey {
+		return results, nil
+	}
+
+	// If prefix is lexicographically smaller than any key in the tree,
+	// we still need to search, but we can optimize by checking if the prefix could
+	// possibly match anything by comparing with the leftmost key
+	leftmostLeaf, err := t.findLeftmostLeaf(ctx, storage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find leftmost leaf: %w", err)
+	}
+
+	// Calculate the "limit" string - the smallest string that's larger than any possible match
+	// For prefix "app", the limit would be "aq" (increment last character)
+	prefixLimit := calculatePrefixLimit(prefix)
+
+	if len(leftmostLeaf.Keys) > 0 {
+		smallestKey := leftmostLeaf.Keys[0]
+		if prefixLimit <= smallestKey && !strings.HasPrefix(smallestKey, prefix) {
+			// The prefix is so small that even after incrementing it,
+			// it's still smaller than the smallest key, and the smallest key
+			// doesn't match the prefix, so no matches are possible
+			return results, nil
+		}
+	}
+
+	// Find the first leaf that might contain our prefix
+	startLeaf, err := t.findLeafNode(ctx, storage, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find leaf node for prefix %s: %w", prefix, err)
+	}
+
+	// Traverse leaves using NextID to find all matching keys
+	current := startLeaf
+	for current != nil {
+		// Check all keys in the current leaf
+		for i, key := range current.Keys {
+			if strings.HasPrefix(key, prefix) {
+				// This key matches our prefix
+				results[key] = current.Values[i]
+			} else if key >= prefixLimit {
+				// We've reached keys that are definitely beyond our prefix range
+				// Since keys are sorted, we can stop here
+				return results, nil
+			}
+		}
+
+		// Move to the next leaf using NextID
+		if current.NextID == "" {
+			break
+		}
+		current, err = storage.LoadNode(ctx, current.NextID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load next leaf node: %w", err)
+		}
+	}
+
+	return results, nil
 }
 
 func (t *BPlusTree) get(ctx context.Context, storage Storage, key string) ([]string, bool, error) {
