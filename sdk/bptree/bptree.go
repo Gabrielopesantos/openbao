@@ -283,6 +283,14 @@ func (t *BPlusTree) splitLeafNode(leaf *Node) (*Node, string) {
 	leaf.Keys = leaf.Keys[:splitIndex]
 	leaf.Values = leaf.Values[:splitIndex]
 
+	// Set up NextID linking: newLeaf should point to what the original leaf was pointing to
+	newLeaf.NextID = leaf.NextID
+	// The original leaf should now point to the new leaf
+	leaf.NextID = newLeaf.ID
+
+	// Set parent reference for the new leaf
+	newLeaf.ParentID = leaf.ParentID
+
 	// Return new leaf and split key to be copied into the parent
 	return newLeaf, newLeaf.Keys[0]
 }
@@ -399,6 +407,75 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node
 	}
 
 	return newInternal, newSplitKey
+}
+
+// findLeftmostLeaf finds the leftmost leaf node in the tree
+func (t *BPlusTree) findLeftmostLeaf(ctx context.Context, storage Storage) (*Node, error) {
+	root, err := t.getRoot(ctx, storage)
+	if err != nil {
+		return nil, err
+	}
+
+	current := root
+	for !current.IsLeaf {
+		// Always go to the leftmost child
+		if len(current.ChildrenIDs) == 0 {
+			return nil, errors.New("internal node has no children")
+		}
+		current, err = storage.LoadNode(ctx, current.ChildrenIDs[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to load child node: %w", err)
+		}
+	}
+
+	return current, nil
+}
+
+// findRightmostLeaf finds the rightmost leaf node in the tree
+func (t *BPlusTree) findRightmostLeaf(ctx context.Context, storage Storage) (*Node, error) {
+	root, err := t.getRoot(ctx, storage)
+	if err != nil {
+		return nil, err
+	}
+
+	current := root
+	for !current.IsLeaf {
+		// Always go to the rightmost child
+		if len(current.ChildrenIDs) == 0 {
+			return nil, errors.New("internal node has no children")
+		}
+		rightmostIndex := len(current.ChildrenIDs) - 1
+		current, err = storage.LoadNode(ctx, current.ChildrenIDs[rightmostIndex])
+		if err != nil {
+			return nil, fmt.Errorf("failed to load child node: %w", err)
+		}
+	}
+
+	return current, nil
+}
+
+// findPreviousLeaf finds the leaf node that should point to the given leaf in the NextID chain
+func (t *BPlusTree) findPreviousLeaf(ctx context.Context, storage Storage, targetLeafID string) (*Node, error) {
+	leftmost, err := t.findLeftmostLeaf(ctx, storage)
+	if err != nil {
+		return nil, err
+	}
+
+	current := leftmost
+	for current != nil {
+		if current.NextID == targetLeafID {
+			return current, nil
+		}
+		if current.NextID == "" {
+			break
+		}
+		current, err = storage.LoadNode(ctx, current.NextID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load next leaf: %w", err)
+		}
+	}
+
+	return nil, nil // Not found
 }
 
 // TODO (gsantos): Delete
