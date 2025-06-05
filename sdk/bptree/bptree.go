@@ -77,12 +77,12 @@ func (t *BPlusTree) getRoot(ctx context.Context, storage Storage) (*Node, error)
 
 // minKeys returns the minimum number of keys a node must have
 func (t *BPlusTree) minKeys() int {
-	return (t.order + 1) / 2 // ⌈m/2⌉
+	return (t.order + 1) / 2 // ⌈m/2⌉ -- Review these values
 }
 
 // maxKeys returns the maximum number of keys a node can have
 func (t *BPlusTree) maxKeys() int {
-	return t.order // m
+	return t.order // m -- Review these values
 }
 
 // isOverfull checks if a node has exceeded its maximum capacity

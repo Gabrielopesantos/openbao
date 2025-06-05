@@ -227,46 +227,56 @@ func TestBPlusTreeDelete(t *testing.T) {
 
 func TestBPlusTreeLargeDataSet(t *testing.T) {
 	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage("bptree_large", s, nil, 100)
+	storage, err := NewNodeStorage("bptree_large", s, nil, 1000)
 	require.NoError(t, err, "Failed to create storage storage")
 
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, 8, storage)
+	tree, err := NewBPlusTree(ctx, 32, storage)
 	require.NoError(t, err, "Failed to create B+ tree")
 
-	// Insert 100 keys
-	for i := 1; i <= 100; i++ {
-		err = tree.Insert(ctx, storage, strconv.Itoa(i), fmt.Sprintf("value%d", i))
-		require.NoError(t, err, "Failed to insert key %d", i)
+	const numKeys = 10000
+
+	// Generate a pseudo-random but deterministic sequence of keys using a simple hash
+	keys := make([]string, numKeys)
+	for i := 0; i < numKeys; i++ {
+		// Use a simple permutation: (i*7919 + 104729) % 1000003
+		k := (i*7919 + 104729) % 1000003
+		keys[i] = strconv.Itoa(k)
+	}
+
+	// Insert all keys
+	for i, key := range keys {
+		err = tree.Insert(ctx, storage, key, fmt.Sprintf("value%d", i))
+		require.NoError(t, err, "Failed to insert key %s", key)
 	}
 
 	// Verify all keys exist
-	for i := 1; i <= 100; i++ {
-		val, found, err := tree.Get(ctx, storage, strconv.Itoa(i))
-		require.NoError(t, err, "Error when getting key %d", i)
-		require.True(t, found, "Should find key %d", i)
-		require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val, "Retrieved value should match for key %d", i)
+	for i, key := range keys {
+		val, found, err := tree.Get(ctx, storage, key)
+		require.NoError(t, err, "Error when getting key %s", key)
+		require.True(t, found, "Should find key %s", key)
+		require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val, "Retrieved value should match for key %s", key)
 	}
 
-	// Delete every other key
-	for i := 2; i <= 100; i += 2 {
-		err = tree.Delete(ctx, storage, strconv.Itoa(i))
-		require.NoError(t, err, "Failed to delete key %d", i)
+	// Delete every other key (even indices)
+	for i := 0; i < numKeys; i += 2 {
+		err = tree.Delete(ctx, storage, keys[i])
+		require.NoError(t, err, "Failed to delete key %s", keys[i])
 	}
 
-	// Verify odd keys exist and even keys don't
-	for i := 1; i <= 100; i++ {
-		val, found, err := tree.Get(ctx, storage, strconv.Itoa(i))
-		require.NoError(t, err, "Error when getting key %d", i)
+	// Verify odd-indexed keys exist and even-indexed keys don't
+	for i, key := range keys {
+		val, found, err := tree.Get(ctx, storage, key)
+		require.NoError(t, err, "Error when getting key %s", key)
 
 		if i%2 == 1 {
-			// Odd keys should exist
-			require.True(t, found, "Should find odd key %d", i)
-			require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val, "Retrieved value should match for key %d", i)
+			// Odd-indexed keys should exist
+			require.True(t, found, "Should find odd-indexed key %s", key)
+			require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val, "Retrieved value should match for key %s", key)
 		} else {
-			// Even keys should be deleted
-			require.False(t, found, "Should not find even key %d", i)
-			require.Empty(t, val, "Value should be empty for deleted key %d", i)
+			// Even-indexed keys should be deleted
+			require.False(t, found, "Should not find even-indexed key %s", key)
+			require.Empty(t, val, "Value should be empty for deleted key %s", key)
 		}
 	}
 }

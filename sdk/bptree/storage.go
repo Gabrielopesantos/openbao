@@ -18,16 +18,16 @@ const (
 )
 
 type Storage interface {
+	// GetRootID gets the ID of the root node
+	GetRootID(ctx context.Context) (string, error)
+	// SetRootID sets the ID of the root node
+	SetRootID(ctx context.Context, id string) error
 	// LoadNode loads a node from storage
 	LoadNode(ctx context.Context, id string) (*Node, error)
 	// SaveNode saves a node to storage
 	SaveNode(ctx context.Context, node *Node) error
 	// DeleteNode deletes a node from storage
 	DeleteNode(ctx context.Context, id string) error
-	// GetRootID gets the ID of the root node
-	GetRootID(ctx context.Context) (string, error)
-	// SetRootID sets the ID of the root node
-	SetRootID(ctx context.Context, id string) error
 	// PurgeNodes clears all nodes from storage starting with the prefix
 	// PurgeNodes(ctx context.Context) error
 }
@@ -122,6 +122,44 @@ func NewTransactionalNodeStorage(
 	return nodeStorage, nil
 }
 
+// GetRootID gets the ID of the root node
+func (s *NodeStorage) GetRootID(ctx context.Context) (string, error) {
+	// Lock the root
+	s.rootLock.RLock()
+	defer s.rootLock.RUnlock()
+
+	path := s.prefix + metadataPath + "/" + rootPath
+	entry, err := s.storage.Get(ctx, path)
+	if err != nil {
+		return "", fmt.Errorf("failed to get root ID: %w", err)
+	}
+
+	if entry == nil {
+		return "", nil
+	}
+
+	return string(entry.Value), nil
+}
+
+// SetRootID sets the ID of the root node
+func (s *NodeStorage) SetRootID(ctx context.Context, id string) error {
+	// Lock the root
+	s.rootLock.Lock()
+	defer s.rootLock.Unlock()
+
+	path := s.prefix + metadataPath + "/" + rootPath
+	entry := &logical.StorageEntry{
+		Key:   path,
+		Value: []byte(id),
+	}
+
+	if err := s.storage.Put(ctx, entry); err != nil {
+		return fmt.Errorf("failed to set root ID: %w", err)
+	}
+
+	return nil
+}
+
 // LoadNode loads a node from storage
 func (s *NodeStorage) LoadNode(ctx context.Context, id string) (*Node, error) {
 	// Lock the nodes for reading
@@ -207,44 +245,6 @@ func (s *NodeStorage) DeleteNode(ctx context.Context, id string) error {
 	// Remove from cache (immediate for non-transactional, queued for transactional)
 	if !s.skipCache {
 		s.applyCacheOp(CacheOpDelete, id, nil)
-	}
-
-	return nil
-}
-
-// GetRootID gets the ID of the root node
-func (s *NodeStorage) GetRootID(ctx context.Context) (string, error) {
-	// Lock the root
-	s.rootLock.RLock()
-	defer s.rootLock.RUnlock()
-
-	path := s.prefix + metadataPath + "/" + rootPath
-	entry, err := s.storage.Get(ctx, path)
-	if err != nil {
-		return "", fmt.Errorf("failed to get root ID: %w", err)
-	}
-
-	if entry == nil {
-		return "", nil
-	}
-
-	return string(entry.Value), nil
-}
-
-// SetRootID sets the ID of the root node
-func (s *NodeStorage) SetRootID(ctx context.Context, id string) error {
-	// Lock the root
-	s.rootLock.Lock()
-	defer s.rootLock.Unlock()
-
-	path := s.prefix + metadataPath + "/" + rootPath
-	entry := &logical.StorageEntry{
-		Key:   path,
-		Value: []byte(id),
-	}
-
-	if err := s.storage.Put(ctx, entry); err != nil {
-		return fmt.Errorf("failed to set root ID: %w", err)
 	}
 
 	return nil
