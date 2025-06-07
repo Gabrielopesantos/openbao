@@ -231,12 +231,9 @@ func (t *BPlusTree) Insert(ctx context.Context, storage Storage, key string, val
 		return err
 	}
 
-	err = t.insertIntoLeaf(leaf, key, value)
-	if err != nil {
-		return err
-	}
+	leaf.insertKeyValue(key, value)
 
-	// If the leaf is overfull, we need to split it
+	// If the leaf has overflow, we need to split it
 	if t.nodeOverflows(leaf) {
 		newLeaf, splitKey := t.splitLeafNode(leaf)
 		// Save both leaf nodes after splitting
@@ -375,7 +372,7 @@ func (t *BPlusTree) splitLeafNode(leaf *Node) (*Node, string) {
 	// Determine split point so that both nodes meet minimum occupancy
 	splitIndex := t.minKeys()
 
-	// Move second half keys/values to new leaf
+	// Move second half keys/values to new leaf (includes the split key)
 	newLeaf.Keys = append(newLeaf.Keys, leaf.Keys[splitIndex:]...)
 	newLeaf.Values = append(newLeaf.Values, leaf.Values[splitIndex:]...)
 
@@ -393,11 +390,6 @@ func (t *BPlusTree) splitLeafNode(leaf *Node) (*Node, string) {
 
 	// Return new leaf and split key to be copied into the parent
 	return newLeaf, newLeaf.Keys[0]
-}
-
-func (t *BPlusTree) insertIntoLeaf(leaf *Node, key string, value string) error {
-	leaf.insertKeyValue(key, value)
-	return nil
 }
 
 // insertIntoParent inserts a key and right node into the parent of left node
@@ -481,14 +473,14 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node
 	splitIndex := t.minKeys()
 
 	// The key at splitIndex is promoted, so do not copy it to any node
-	newSplitKey := node.Keys[splitIndex]
+	splitKey := node.Keys[splitIndex]
 
 	// Copy keys and children after splitIndex to newInternal
 	newInternal.Keys = append(newInternal.Keys, node.Keys[splitIndex+1:]...)
 	newInternal.ChildrenIDs = append(newInternal.ChildrenIDs, node.ChildrenIDs[splitIndex+1:]...)
 
 	// Update original node with first half
-	node.Keys = node.Keys[:splitIndex+1]
+	node.Keys = node.Keys[:splitIndex]                 // Keep only keys before the split key
 	node.ChildrenIDs = node.ChildrenIDs[:splitIndex+1] // Keep one extra child for the split key
 
 	// Update parent references of newInternal's children
@@ -505,7 +497,7 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node
 		}
 	}
 
-	return newInternal, newSplitKey
+	return newInternal, splitKey
 }
 
 // findLeftmostLeaf finds the leftmost leaf node in the tree
