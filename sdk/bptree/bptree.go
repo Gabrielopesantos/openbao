@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -31,8 +32,8 @@ func NewBPlusTree(
 	order int,
 	storage Storage,
 ) (*BPlusTree, error) {
-	if order < 2 {
-		return nil, fmt.Errorf("order must be at least 2, got %d", order)
+	if order < 3 {
+		return nil, fmt.Errorf("order must be at least 3, got %d", order)
 	}
 
 	tree := &BPlusTree{
@@ -76,26 +77,37 @@ func (t *BPlusTree) getRoot(ctx context.Context, storage Storage) (*Node, error)
 	return storage.LoadNode(ctx, rootID)
 }
 
+// maxChildrenNodes returns the maximum number of children an internal node can have
+func (t *BPlusTree) maxChildrenNodes() int {
+	return t.order
+}
+
+// maxKeys returns the maxium number of keys an internal node can have
+func (t *BPlusTree) maxKeys() int {
+	return t.maxChildrenNodes() - 1
+}
+
+// minChildrenNodes returns the minimum number of children an internal node can have
+func (t *BPlusTree) minChildrenNodes() int {
+	return int(math.Ceil(float64(t.order) / float64(2)))
+}
+
 // minKeys returns the minimum number of keys a node must have
 func (t *BPlusTree) minKeys() int {
-	return (t.order + 1) / 2 // ⌈m/2⌉ -- Review these values
+	return t.minChildrenNodes() - 1
 }
 
-// maxKeys returns the maximum number of keys a node can have
-func (t *BPlusTree) maxKeys() int {
-	return t.order // m -- Review these values
-}
-
-// isOverfull checks if a node has exceeded its maximum capacity
-func (t *BPlusTree) isOverfull(node *Node) bool {
+// nodeOverflows checks if a node has exceeded its maximum capacity
+func (t *BPlusTree) nodeOverflows(node *Node) bool {
 	return len(node.Keys) > t.maxKeys()
 }
 
-// isUnderfull checks if a node has fallen below its minimum capacity
-// func (t *BPlusTree) isUnderfull(node *Node) bool {
+// nodeUnderflows checks if a node has fallen below its minimum capacity
+// func (t *BPlusTree) nodeUnderflows(node *Node) bool {
 // 	return len(node.Keys) < t.minKeys()
 // }
 
+// NOTE (gabrielopesantos): Rename this method
 // Get retrieves all values for a key
 func (t *BPlusTree) Get(ctx context.Context, storage Storage, key string) ([]string, bool, error) {
 	t.lock.RLock()
@@ -225,7 +237,7 @@ func (t *BPlusTree) Insert(ctx context.Context, storage Storage, key string, val
 	}
 
 	// If the leaf is overfull, we need to split it
-	if t.isOverfull(leaf) {
+	if t.nodeOverflows(leaf) {
 		newLeaf, splitKey := t.splitLeafNode(leaf)
 		// Save both leaf nodes after splitting
 		if err := storage.SaveNode(ctx, leaf); err != nil { // NOTE:  We do not necessarily need to save them, just cache them somewhere
@@ -361,7 +373,6 @@ func (t *BPlusTree) splitLeafNode(leaf *Node) (*Node, string) {
 	newLeaf := NewLeafNode(genUUID())
 
 	// Determine split point so that both nodes meet minimum occupancy
-	// For leaf nodes, we want to ensure both nodes have at least ⌈m/2⌉ keys
 	splitIndex := t.minKeys()
 
 	// Move second half keys/values to new leaf
@@ -447,7 +458,7 @@ func (t *BPlusTree) insertIntoParent(ctx context.Context, storage Storage, leftN
 	}
 
 	// If the internal node is overfull, we need to split it
-	if t.isOverfull(parent) {
+	if t.nodeOverflows(parent) {
 		newInternal, splitKey := t.splitInternalNode(ctx, storage, parent)
 		// Save both internal nodes after splitting
 		if err := storage.SaveNode(ctx, parent); err != nil {
@@ -467,7 +478,6 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node
 	newInternal := NewInternalNode(genUUID())
 
 	// Determine split point so that both nodes meet minimum occupancy
-	// For internal nodes, we want to ensure both nodes have at least ⌈m/2⌉ children
 	splitIndex := t.minKeys()
 
 	// The key at splitIndex is promoted, so do not copy it to any node
@@ -544,28 +554,28 @@ func (t *BPlusTree) findRightmostLeaf(ctx context.Context, storage Storage) (*No
 }
 
 // findPreviousLeaf finds the leaf node that should point to the given leaf in the NextID chain
-func (t *BPlusTree) findPreviousLeaf(ctx context.Context, storage Storage, targetLeafID string) (*Node, error) {
-	leftmost, err := t.findLeftmostLeaf(ctx, storage)
-	if err != nil {
-		return nil, err
-	}
-
-	current := leftmost
-	for current != nil {
-		if current.NextID == targetLeafID {
-			return current, nil
-		}
-		if current.NextID == "" {
-			break
-		}
-		current, err = storage.LoadNode(ctx, current.NextID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load next leaf: %w", err)
-		}
-	}
-
-	return nil, nil // Not found
-}
+// func (t *BPlusTree) findPreviousLeaf(ctx context.Context, storage Storage, targetLeafID string) (*Node, error) {
+// 	leftmost, err := t.findLeftmostLeaf(ctx, storage)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+//
+// 	current := leftmost
+// 	for current != nil {
+// 		if current.NextID == targetLeafID {
+// 			return current, nil
+// 		}
+// 		if current.NextID == "" {
+// 			break
+// 		}
+// 		current, err = storage.LoadNode(ctx, current.NextID)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("failed to load next leaf: %w", err)
+// 		}
+// 	}
+//
+// 	return nil, nil // Not found
+// }
 
 // TODO (gsantos): Delete
 // Print prints a visual representation of the B+ tree

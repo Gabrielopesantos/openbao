@@ -88,7 +88,7 @@ func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
 
 	// Create a tree with small order to test splitting
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, 2, storage)
+	tree, err := NewBPlusTree(ctx, 3, storage)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert keys that will cause leaf splitting
@@ -457,7 +457,7 @@ func TestBPlusTreeEdgeCases(t *testing.T) {
 	require.NoError(t, err, "Failed to create storage storage")
 
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, 2, storage) // Small order to test splits
+	tree, err := NewBPlusTree(ctx, 3, storage) // Small order to test splits
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	t.Run("SplitAtRoot", func(t *testing.T) {
@@ -695,7 +695,7 @@ func TestNextIDLinking(t *testing.T) {
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	// Use a small order to force splits
-	tree, err := NewBPlusTree(ctx, 2, storage)
+	tree, err := NewBPlusTree(ctx, 3, storage)
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	t.Run("SingleLeafNode", func(t *testing.T) {
