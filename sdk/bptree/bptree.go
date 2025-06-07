@@ -103,9 +103,9 @@ func (t *BPlusTree) nodeOverflows(node *Node) bool {
 }
 
 // nodeUnderflows checks if a node has fallen below its minimum capacity
-// func (t *BPlusTree) nodeUnderflows(node *Node) bool {
-// 	return len(node.Keys) < t.minKeys()
-// }
+func (t *BPlusTree) nodeUnderflows(node *Node) bool {
+	return len(node.Keys) < t.minKeys()
+}
 
 // NOTE (gabrielopesantos): Rename this method
 // Get retrieves all values for a key
@@ -279,7 +279,14 @@ func (t *BPlusTree) Delete(ctx context.Context, storage Storage, key string) err
 		return fmt.Errorf("failed to save leaf node: %w", err)
 	}
 
-	// TODO (gabrielopesantos): Do we really need to handle underflow?
+	// Handle underflow if the node is not the root and has too few keys
+	rootID, err := storage.GetRootID(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get root ID: %w", err)
+	}
+	if leaf.ID != rootID && t.nodeUnderflows(leaf) {
+		return t.handleUnderflow(ctx, storage, leaf)
+	}
 
 	return nil
 }
@@ -322,6 +329,15 @@ func (t *BPlusTree) DeleteValue(ctx context.Context, storage Storage, key string
 			// Save the leaf node after deletion
 			if err := storage.SaveNode(ctx, leaf); err != nil {
 				return fmt.Errorf("failed to save leaf node: %w", err)
+			}
+
+			// Handle underflow if the node is not the root and has too few keys
+			rootID, err := storage.GetRootID(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to get root ID: %w", err)
+			}
+			if leaf.ID != rootID && t.nodeUnderflows(leaf) {
+				return t.handleUnderflow(ctx, storage, leaf)
 			}
 
 			return nil
@@ -498,6 +514,352 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node
 	}
 
 	return newInternal, splitKey
+}
+
+// handleOverflow handles overflow in a node by splitting it
+func (t *BPlusTree) handleOverflow(ctx context.Context, storage Storage, node *Node) error {
+	return nil
+}
+
+// handleUnderflow handles underflow in a node by trying to borrow from siblings or merge
+func (t *BPlusTree) handleUnderflow(ctx context.Context, storage Storage, node *Node) error {
+	// If it's the root node, no underflow handling needed
+	rootID, err := storage.GetRootID(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get root ID: %w", err)
+	}
+	if node.ID == rootID {
+		// Root can have fewer keys, but if it's empty and has children, promote the only child
+		if !node.IsLeaf && len(node.Keys) == 0 && len(node.ChildrenIDs) == 1 {
+			return storage.SetRootID(ctx, node.ChildrenIDs[0])
+		}
+		return nil
+	}
+
+	// Load parent and find node's position
+	parent, err := storage.LoadNode(ctx, node.ParentID)
+	if err != nil {
+		return fmt.Errorf("failed to load parent node: %w", err)
+	}
+
+	nodeIndex := -1
+	for i, childID := range parent.ChildrenIDs {
+		if childID == node.ID {
+			nodeIndex = i
+			break
+		}
+	}
+	if nodeIndex == -1 {
+		return errors.New("node not found in parent's children")
+	}
+
+	// Try to borrow from left sibling first
+	if nodeIndex > 0 {
+		leftSibling, err := storage.LoadNode(ctx, parent.ChildrenIDs[nodeIndex-1])
+		if err != nil {
+			return fmt.Errorf("failed to load left sibling: %w", err)
+		}
+		if len(leftSibling.Keys) > t.minKeys() {
+			return t.borrowFromSibling(ctx, storage, node, leftSibling, parent, nodeIndex, true)
+		}
+	}
+
+	// Try to borrow from right sibling
+	if nodeIndex < len(parent.ChildrenIDs)-1 {
+		rightSibling, err := storage.LoadNode(ctx, parent.ChildrenIDs[nodeIndex+1])
+		if err != nil {
+			return fmt.Errorf("failed to load right sibling: %w", err)
+		}
+		if len(rightSibling.Keys) > t.minKeys() {
+			return t.borrowFromSibling(ctx, storage, node, rightSibling, parent, nodeIndex, false)
+		}
+	}
+
+	// Can't borrow, need to merge
+	// Prefer merging with left sibling
+	if nodeIndex > 0 {
+		leftSibling, err := storage.LoadNode(ctx, parent.ChildrenIDs[nodeIndex-1])
+		if err != nil {
+			return fmt.Errorf("failed to load left sibling for merge: %w", err)
+		}
+		return t.mergeWithSibling(ctx, storage, node, leftSibling, parent, nodeIndex, true)
+	} else {
+		// Merge with right sibling
+		rightSibling, err := storage.LoadNode(ctx, parent.ChildrenIDs[nodeIndex+1])
+		if err != nil {
+			return fmt.Errorf("failed to load right sibling for merge: %w", err)
+		}
+		return t.mergeWithSibling(ctx, storage, node, rightSibling, parent, nodeIndex, false)
+	}
+}
+
+// borrowFromSibling borrows a key from a sibling node
+func (t *BPlusTree) borrowFromSibling(ctx context.Context, storage Storage, node *Node, sibling *Node, parent *Node, nodeIndex int, borrowFromLeft bool) error {
+	if node.IsLeaf {
+		return t.borrowFromLeafSibling(ctx, storage, node, sibling, parent, nodeIndex, borrowFromLeft)
+	} else {
+		return t.borrowFromInternalSibling(ctx, storage, node, sibling, parent, nodeIndex, borrowFromLeft)
+	}
+}
+
+// borrowFromLeafSibling borrows a key-value pair from a leaf sibling
+func (t *BPlusTree) borrowFromLeafSibling(ctx context.Context, storage Storage, node *Node, sibling *Node, parent *Node, nodeIndex int, borrowFromLeft bool) error {
+	if borrowFromLeft {
+		// Borrow the rightmost key-value from left sibling
+		borrowedKey := sibling.Keys[len(sibling.Keys)-1]
+		borrowedValue := sibling.Values[len(sibling.Values)-1]
+
+		// Remove from sibling
+		sibling.removeKeyValue(len(sibling.Keys) - 1)
+
+		// Insert at beginning of node
+		node.Keys = slices.Insert(node.Keys, 0, borrowedKey)
+		node.Values = slices.Insert(node.Values, 0, borrowedValue)
+
+		// Update parent's separator key (key between left sibling and node)
+		parent.Keys[nodeIndex-1] = node.Keys[0]
+	} else {
+		// Borrow the leftmost key-value from right sibling
+		borrowedKey := sibling.Keys[0]
+		borrowedValue := sibling.Values[0]
+
+		// Remove from sibling
+		sibling.removeKeyValue(0)
+
+		// Insert at end of node
+		node.Keys = append(node.Keys, borrowedKey)
+		node.Values = append(node.Values, borrowedValue)
+
+		// Update parent's separator key (key between node and right sibling)
+		parent.Keys[nodeIndex] = sibling.Keys[0]
+	}
+
+	// Save all modified nodes
+	if err := storage.SaveNode(ctx, node); err != nil {
+		return fmt.Errorf("failed to save node: %w", err)
+	}
+	if err := storage.SaveNode(ctx, sibling); err != nil {
+		return fmt.Errorf("failed to save sibling: %w", err)
+	}
+	if err := storage.SaveNode(ctx, parent); err != nil {
+		return fmt.Errorf("failed to save parent: %w", err)
+	}
+
+	return nil
+}
+
+// borrowFromInternalSibling borrows a key and child from an internal sibling
+func (t *BPlusTree) borrowFromInternalSibling(ctx context.Context, storage Storage, node *Node, sibling *Node, parent *Node, nodeIndex int, borrowFromLeft bool) error {
+	if borrowFromLeft {
+		// Move separator key from parent to node
+		separatorKey := parent.Keys[nodeIndex-1]
+		node.Keys = slices.Insert(node.Keys, 0, separatorKey)
+
+		// Move rightmost child from sibling to node
+		borrowedChild := sibling.ChildrenIDs[len(sibling.ChildrenIDs)-1]
+		sibling.ChildrenIDs = sibling.ChildrenIDs[:len(sibling.ChildrenIDs)-1]
+		node.ChildrenIDs = slices.Insert(node.ChildrenIDs, 0, borrowedChild)
+
+		// Move rightmost key from sibling to parent (becomes new separator)
+		parent.Keys[nodeIndex-1] = sibling.Keys[len(sibling.Keys)-1]
+		sibling.Keys = sibling.Keys[:len(sibling.Keys)-1]
+
+		// Update borrowed child's parent
+		child, err := storage.LoadNode(ctx, borrowedChild)
+		if err != nil {
+			return fmt.Errorf("failed to load borrowed child: %w", err)
+		}
+		child.ParentID = node.ID
+		if err := storage.SaveNode(ctx, child); err != nil {
+			return fmt.Errorf("failed to save borrowed child: %w", err)
+		}
+	} else {
+		// Move separator key from parent to node
+		separatorKey := parent.Keys[nodeIndex]
+		node.Keys = append(node.Keys, separatorKey)
+
+		// Move leftmost child from sibling to node
+		borrowedChild := sibling.ChildrenIDs[0]
+		sibling.ChildrenIDs = sibling.ChildrenIDs[1:]
+		node.ChildrenIDs = append(node.ChildrenIDs, borrowedChild)
+
+		// Move leftmost key from sibling to parent (becomes new separator)
+		parent.Keys[nodeIndex] = sibling.Keys[0]
+		sibling.Keys = sibling.Keys[1:]
+
+		// Update borrowed child's parent
+		child, err := storage.LoadNode(ctx, borrowedChild)
+		if err != nil {
+			return fmt.Errorf("failed to load borrowed child: %w", err)
+		}
+		child.ParentID = node.ID
+		if err := storage.SaveNode(ctx, child); err != nil {
+			return fmt.Errorf("failed to save borrowed child: %w", err)
+		}
+	}
+
+	// Save all modified nodes
+	if err := storage.SaveNode(ctx, node); err != nil {
+		return fmt.Errorf("failed to save node: %w", err)
+	}
+	if err := storage.SaveNode(ctx, sibling); err != nil {
+		return fmt.Errorf("failed to save sibling: %w", err)
+	}
+	if err := storage.SaveNode(ctx, parent); err != nil {
+		return fmt.Errorf("failed to save parent: %w", err)
+	}
+
+	return nil
+}
+
+// mergeWithSibling merges a node with its sibling
+func (t *BPlusTree) mergeWithSibling(ctx context.Context, storage Storage, node *Node, sibling *Node, parent *Node, nodeIndex int, mergeWithLeft bool) error {
+	if node.IsLeaf {
+		return t.mergeLeafNodes(ctx, storage, node, sibling, parent, nodeIndex, mergeWithLeft)
+	} else {
+		return t.mergeInternalNodes(ctx, storage, node, sibling, parent, nodeIndex, mergeWithLeft)
+	}
+}
+
+// mergeLeafNodes merges two leaf nodes
+func (t *BPlusTree) mergeLeafNodes(ctx context.Context, storage Storage, node *Node, sibling *Node, parent *Node, nodeIndex int, mergeWithLeft bool) error {
+	var separatorIndex int
+	var nodeToKeep, nodeToRemove *Node
+
+	if mergeWithLeft {
+		// Merge node into left sibling
+		nodeToKeep = sibling
+		nodeToRemove = node
+		separatorIndex = nodeIndex - 1
+
+		// Move all keys/values from node to sibling
+		nodeToKeep.Keys = append(nodeToKeep.Keys, nodeToRemove.Keys...)
+		nodeToKeep.Values = append(nodeToKeep.Values, nodeToRemove.Values...)
+
+		// Update NextID linking
+		nodeToKeep.NextID = nodeToRemove.NextID
+	} else {
+		// Merge right sibling into node
+		nodeToKeep = node
+		nodeToRemove = sibling
+		separatorIndex = nodeIndex
+
+		// Move all keys/values from sibling to node
+		nodeToKeep.Keys = append(nodeToKeep.Keys, nodeToRemove.Keys...)
+		nodeToKeep.Values = append(nodeToKeep.Values, nodeToRemove.Values...)
+
+		// Update NextID linking
+		nodeToKeep.NextID = nodeToRemove.NextID
+	}
+
+	// Remove separator key from parent
+	parent.Keys = slices.Delete(parent.Keys, separatorIndex, separatorIndex+1)
+	// Remove child pointer from parent
+	childIndexToRemove := separatorIndex + 1
+	if mergeWithLeft {
+		childIndexToRemove = nodeIndex
+	}
+	parent.ChildrenIDs = slices.Delete(parent.ChildrenIDs, childIndexToRemove, childIndexToRemove+1)
+
+	// Save the merged node and parent
+	if err := storage.SaveNode(ctx, nodeToKeep); err != nil {
+		return fmt.Errorf("failed to save merged node: %w", err)
+	}
+	if err := storage.SaveNode(ctx, parent); err != nil {
+		return fmt.Errorf("failed to save parent after merge: %w", err)
+	}
+
+	// Delete the removed node
+	if err := storage.DeleteNode(ctx, nodeToRemove.ID); err != nil {
+		return fmt.Errorf("failed to delete merged node: %w", err)
+	}
+
+	// Check if parent underflows
+	rootID, err := storage.GetRootID(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get root ID: %w", err)
+	}
+	if parent.ID != rootID && t.nodeUnderflows(parent) {
+		return t.handleUnderflow(ctx, storage, parent)
+	}
+
+	return nil
+}
+
+// mergeInternalNodes merges two internal nodes
+func (t *BPlusTree) mergeInternalNodes(ctx context.Context, storage Storage, node *Node, sibling *Node, parent *Node, nodeIndex int, mergeWithLeft bool) error {
+	var separatorIndex int
+	var nodeToKeep, nodeToRemove *Node
+	var separatorKey string
+
+	if mergeWithLeft {
+		// Merge node into left sibling
+		nodeToKeep = sibling
+		nodeToRemove = node
+		separatorIndex = nodeIndex - 1
+		separatorKey = parent.Keys[separatorIndex]
+
+		// Add separator key and merge keys/children
+		nodeToKeep.Keys = append(nodeToKeep.Keys, separatorKey)
+		nodeToKeep.Keys = append(nodeToKeep.Keys, nodeToRemove.Keys...)
+		nodeToKeep.ChildrenIDs = append(nodeToKeep.ChildrenIDs, nodeToRemove.ChildrenIDs...)
+	} else {
+		// Merge right sibling into node
+		nodeToKeep = node
+		nodeToRemove = sibling
+		separatorIndex = nodeIndex
+		separatorKey = parent.Keys[separatorIndex]
+
+		// Add separator key and merge keys/children
+		nodeToKeep.Keys = append(nodeToKeep.Keys, separatorKey)
+		nodeToKeep.Keys = append(nodeToKeep.Keys, nodeToRemove.Keys...)
+		nodeToKeep.ChildrenIDs = append(nodeToKeep.ChildrenIDs, nodeToRemove.ChildrenIDs...)
+	}
+
+	// Update parent references for all children of the merged node
+	for _, childID := range nodeToRemove.ChildrenIDs {
+		child, err := storage.LoadNode(ctx, childID)
+		if err != nil {
+			continue // Log error but continue
+		}
+		child.ParentID = nodeToKeep.ID
+		if err := storage.SaveNode(ctx, child); err != nil {
+			continue // Log error but continue
+		}
+	}
+
+	// Remove separator key from parent
+	parent.Keys = slices.Delete(parent.Keys, separatorIndex, separatorIndex+1)
+	// Remove child pointer from parent
+	childIndexToRemove := separatorIndex + 1
+	if mergeWithLeft {
+		childIndexToRemove = nodeIndex
+	}
+	parent.ChildrenIDs = slices.Delete(parent.ChildrenIDs, childIndexToRemove, childIndexToRemove+1)
+
+	// Save the merged node and parent
+	if err := storage.SaveNode(ctx, nodeToKeep); err != nil {
+		return fmt.Errorf("failed to save merged node: %w", err)
+	}
+	if err := storage.SaveNode(ctx, parent); err != nil {
+		return fmt.Errorf("failed to save parent after merge: %w", err)
+	}
+
+	// Delete the removed node
+	if err := storage.DeleteNode(ctx, nodeToRemove.ID); err != nil {
+		return fmt.Errorf("failed to delete merged node: %w", err)
+	}
+
+	// Check if parent underflows
+	rootID, err := storage.GetRootID(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get root ID: %w", err)
+	}
+	if parent.ID != rootID && t.nodeUnderflows(parent) {
+		return t.handleUnderflow(ctx, storage, parent)
+	}
+
+	return nil
 }
 
 // findLeftmostLeaf finds the leftmost leaf node in the tree
