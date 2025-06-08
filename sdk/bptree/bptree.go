@@ -20,24 +20,81 @@ var ErrKeyNotFound = errors.New("key not found")
 // ErrValueNotFound is returned when a value is not found in the tree
 var ErrValueNotFound = errors.New("value not found")
 
+// BPlusTreeConfig holds configuration options for the B+ tree
+type BPlusTreeConfig struct {
+	Order    int // Maximum number of children per node
+	MinOrder int // Minimum number of children per node (By default, it's half of Order)
+}
+
+func NewDefaultBPlusTreeConfig() *BPlusTreeConfig {
+	return NewBPlusTreeConfigFromOrder(DefaultOrder)
+}
+
+func NewBPlusTreeConfigFromOrder(order int) *BPlusTreeConfig {
+	if order < 3 {
+		order = DefaultOrder
+	}
+
+	minOrder := int(math.Ceil(float64(order) / float64(2)))
+	return &BPlusTreeConfig{
+		Order:    order,
+		MinOrder: minOrder,
+	}
+}
+
+func NewBPlusTreeConfig(order, minOrder int) *BPlusTreeConfig {
+	if order < 3 {
+		order = DefaultOrder
+	}
+
+	// return int(math.Ceil(float64(t.config.MinOrder) / float64(2)))
+	if minOrder < 2 || minOrder > order {
+		minOrder = order / 2
+	}
+
+	return &BPlusTreeConfig{
+		Order:    order,
+		MinOrder: minOrder,
+	}
+}
+
+// validateConfig checks if the BPlusTreeConfig is valid
+func validateConfig(config *BPlusTreeConfig) error {
+	if config == nil {
+		return fmt.Errorf("BPlusTreeConfig cannot be nil")
+	}
+	if config.Order < 3 {
+		return fmt.Errorf("order must be at least 3, got %d", config.Order)
+	}
+	if config.MinOrder < 2 || config.MinOrder > config.Order {
+		return fmt.Errorf("min order must be at least 2 and at most order, got %d", config.MinOrder)
+	}
+	return nil
+}
+
 // BPlusTree represents a B+ tree data structure
 type BPlusTree struct {
-	order int
-	lock  sync.RWMutex
+	config *BPlusTreeConfig // Configuration for the B+ tree
+	lock   sync.RWMutex     // Mutex to protect concurrent access
 }
 
 // NewBPlusTree creates a new B+ tree with the specified order and comparison functions
 func NewBPlusTree(
 	ctx context.Context,
-	order int,
 	storage Storage,
+	config *BPlusTreeConfig,
 ) (*BPlusTree, error) {
-	if order < 3 {
-		return nil, fmt.Errorf("order must be at least 3, got %d", order)
+	// Validate config
+	if config == nil {
+		config = NewDefaultBPlusTreeConfig()
+	} else {
+		if err := validateConfig(config); err != nil {
+			return nil, fmt.Errorf("invalid BPlusTreeConfig: %w", err)
+		}
 	}
 
 	tree := &BPlusTree{
-		order: order,
+		config: config,
 	}
 
 	// Initialize the tree with a root node
@@ -79,7 +136,7 @@ func (t *BPlusTree) getRoot(ctx context.Context, storage Storage) (*Node, error)
 
 // maxChildrenNodes returns the maximum number of children an internal node can have
 func (t *BPlusTree) maxChildrenNodes() int {
-	return t.order
+	return t.config.Order
 }
 
 // maxKeys returns the maxium number of keys an internal node can have
@@ -89,7 +146,7 @@ func (t *BPlusTree) maxKeys() int {
 
 // minChildrenNodes returns the minimum number of children an internal node can have
 func (t *BPlusTree) minChildrenNodes() int {
-	return int(math.Ceil(float64(t.order) / float64(2)))
+	return t.config.MinOrder
 }
 
 // minKeys returns the minimum number of keys a node must have
@@ -385,8 +442,8 @@ func (t *BPlusTree) splitLeafNode(leaf *Node) (*Node, string) {
 	// Create a new leaf node
 	newLeaf := NewLeafNode(genUUID())
 
-	// Determine split point so that both nodes meet minimum occupancy
-	splitIndex := t.minKeys()
+	// Split at the median index
+	splitIndex := int(math.Floor(float64(len(leaf.Keys)) / float64(2)))
 
 	// Move second half keys/values to new leaf (includes the split key)
 	newLeaf.Keys = append(newLeaf.Keys, leaf.Keys[splitIndex:]...)
@@ -485,8 +542,8 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node
 	// Create a new internal node
 	newInternal := NewInternalNode(genUUID())
 
-	// Determine split point so that both nodes meet minimum occupancy
-	splitIndex := t.minKeys()
+	// Split at the median index
+	splitIndex := int(math.Floor(float64(len(node.Keys)) / float64(2)))
 
 	// The key at splitIndex is promoted, so do not copy it to any node
 	splitKey := node.Keys[splitIndex]
