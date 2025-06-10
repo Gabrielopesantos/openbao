@@ -11,51 +11,33 @@ import (
 	"sync"
 )
 
-// DefaultOrder is the default maximum number of children per B+ tree node
-const DefaultOrder = 32
-
 // ErrKeyNotFound is returned when a key is not found in the tree
 var ErrKeyNotFound = errors.New("key not found")
 
 // ErrValueNotFound is returned when a value is not found in the tree
 var ErrValueNotFound = errors.New("value not found")
 
+// DefaultOrder is the default maximum number of children per B+ tree node
+const DefaultOrder = 32
+
 // BPlusTreeConfig holds configuration options for the B+ tree
 type BPlusTreeConfig struct {
-	Order    int // Maximum number of children per node
-	MinOrder int // Minimum number of children per node (By default, it's half of Order)
+	Order int // Maximum number of children per node
 }
 
-func NewDefaultBPlusTreeConfig() *BPlusTreeConfig {
-	return NewBPlusTreeConfigFromOrder(DefaultOrder)
+func NewDefaultBPlusTreeConfig() (config *BPlusTreeConfig) {
+	config, _ = NewBPlusTreeConfig(DefaultOrder)
+	return
 }
 
-func NewBPlusTreeConfigFromOrder(order int) *BPlusTreeConfig {
+func NewBPlusTreeConfig(order int) (*BPlusTreeConfig, error) {
 	if order < 3 {
-		order = DefaultOrder
-	}
-
-	minOrder := int(math.Ceil(float64(order) / float64(2)))
-	return &BPlusTreeConfig{
-		Order:    order,
-		MinOrder: minOrder,
-	}
-}
-
-func NewBPlusTreeConfig(order, minOrder int) *BPlusTreeConfig {
-	if order < 3 {
-		order = DefaultOrder
-	}
-
-	// return int(math.Ceil(float64(t.config.MinOrder) / float64(2)))
-	if minOrder < 2 || minOrder > order {
-		minOrder = order / 2
+		return nil, fmt.Errorf("order must be at least 3, got %d", order)
 	}
 
 	return &BPlusTreeConfig{
-		Order:    order,
-		MinOrder: minOrder,
-	}
+		Order: order,
+	}, nil
 }
 
 // validateConfig checks if the BPlusTreeConfig is valid
@@ -65,9 +47,6 @@ func validateConfig(config *BPlusTreeConfig) error {
 	}
 	if config.Order < 3 {
 		return fmt.Errorf("order must be at least 3, got %d", config.Order)
-	}
-	if config.MinOrder < 2 || config.MinOrder > config.Order {
-		return fmt.Errorf("min order must be at least 2 and at most order, got %d", config.MinOrder)
 	}
 	return nil
 }
@@ -146,7 +125,7 @@ func (t *BPlusTree) maxKeys() int {
 
 // minChildrenNodes returns the minimum number of children an internal node can have
 func (t *BPlusTree) minChildrenNodes() int {
-	return t.config.MinOrder
+	return int(math.Ceil(float64(t.config.Order) / float64(2)))
 }
 
 // minKeys returns the minimum number of keys a node must have
