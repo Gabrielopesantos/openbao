@@ -11,6 +11,33 @@ import (
 	"sync"
 )
 
+// Context keys for tree identification
+type contextKey string
+
+const (
+	TreeIDContextKey contextKey = "bptree-tree-id"
+	DefaultTreeID    string     = "default"
+)
+
+// WithTreeID adds a tree ID to the context
+func WithTreeID(ctx context.Context, treeID string) context.Context {
+	return context.WithValue(ctx, TreeIDContextKey, treeID)
+}
+
+// GetTreeID extracts the tree ID from context, returns default if not found
+func GetTreeID(ctx context.Context) (string, bool) {
+	treeID, ok := ctx.Value(TreeIDContextKey).(string)
+	return treeID, ok
+}
+
+// GetTreeIDOrDefault extracts tree ID from context or returns a default
+func GetTreeIDOrDefault(ctx context.Context, defaultTreeID string) string {
+	if treeID, ok := GetTreeID(ctx); ok && treeID != "" {
+		return treeID
+	}
+	return defaultTreeID
+}
+
 // ErrKeyNotFound is returned when a key is not found in the tree
 var ErrKeyNotFound = errors.New("key not found")
 
@@ -22,21 +49,36 @@ const DefaultOrder = 32
 
 // BPlusTreeConfig holds configuration options for the B+ tree
 type BPlusTreeConfig struct {
-	Order int // Maximum number of children per node
+	TreeID string // Tree name/identifier for multi-tree storage
+	Order  int    // Maximum number of children per node
 }
 
-func NewDefaultBPlusTreeConfig() (config *BPlusTreeConfig) {
-	config, _ = NewBPlusTreeConfig(DefaultOrder)
-	return
+func NewDefaultBPlusTreeConfig() *BPlusTreeConfig {
+	return &BPlusTreeConfig{
+		TreeID: DefaultTreeID,
+		Order:  DefaultOrder,
+	}
 }
 
-func NewBPlusTreeConfig(order int) (*BPlusTreeConfig, error) {
+func NewBPlusTreeConfig(treeID string, order int) (*BPlusTreeConfig, error) {
 	if order < 3 {
 		return nil, fmt.Errorf("order must be at least 3, got %d", order)
 	}
 
 	return &BPlusTreeConfig{
-		Order: order,
+		TreeID: treeID,
+		Order:  order,
+	}, nil
+}
+
+func NewNamedBPlusTreeConfig(name string, order int) (*BPlusTreeConfig, error) {
+	if order < 3 {
+		return nil, fmt.Errorf("order must be at least 3, got %d", order)
+	}
+
+	return &BPlusTreeConfig{
+		TreeID: name,
+		Order:  order,
 	}, nil
 }
 
@@ -57,6 +99,14 @@ type BPlusTree struct {
 	lock   sync.RWMutex     // Mutex to protect concurrent access
 }
 
+// contextWithTreeID returns a context with the tree's ID added, enabling multi-tree storage
+func (t *BPlusTree) contextWithTreeID(ctx context.Context) context.Context {
+	if t.config.TreeID != "" {
+		return WithTreeID(ctx, t.config.TreeID)
+	}
+	return ctx
+}
+
 // NewBPlusTree creates a new B+ tree with the specified order and comparison functions
 func NewBPlusTree(
 	ctx context.Context,
@@ -75,6 +125,9 @@ func NewBPlusTree(
 	tree := &BPlusTree{
 		config: config,
 	}
+
+	// Use tree-aware context for initialization
+	ctx = tree.contextWithTreeID(ctx)
 
 	// Initialize the tree with a root node
 	rootID, err := storage.GetRootID(ctx)
@@ -149,6 +202,7 @@ func (t *BPlusTree) Get(ctx context.Context, storage Storage, key string) ([]str
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
+	ctx = t.contextWithTreeID(ctx)
 	return t.get(ctx, storage, key)
 }
 
@@ -158,6 +212,7 @@ func (t *BPlusTree) SearchPrefix(ctx context.Context, storage Storage, prefix st
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
+	ctx = t.contextWithTreeID(ctx)
 	results := make(map[string][]string)
 
 	// Handle empty prefix - we don't allow this as it would return all keys which is expensive
@@ -262,6 +317,7 @@ func (t *BPlusTree) Insert(ctx context.Context, storage Storage, key string, val
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	ctx = t.contextWithTreeID(ctx)
 	leaf, err := t.findLeafNode(ctx, storage, key)
 	if err != nil {
 		return err
@@ -295,6 +351,7 @@ func (t *BPlusTree) Delete(ctx context.Context, storage Storage, key string) err
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	ctx = t.contextWithTreeID(ctx)
 	// Find the leaf node where the key belongs
 	leaf, err := t.findLeafNode(ctx, storage, key)
 	if err != nil {
@@ -337,6 +394,7 @@ func (t *BPlusTree) DeleteValue(ctx context.Context, storage Storage, key string
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	ctx = t.contextWithTreeID(ctx)
 	leaf, err := t.findLeafNode(ctx, storage, key)
 	if err != nil {
 		return err
@@ -550,11 +608,6 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node
 	}
 
 	return newInternal, splitKey
-}
-
-// handleOverflow handles overflow in a node by splitting it
-func (t *BPlusTree) handleOverflow(ctx context.Context, storage Storage, node *Node) error {
-	return nil
 }
 
 // handleUnderflow handles underflow in a node by trying to borrow from siblings or merge

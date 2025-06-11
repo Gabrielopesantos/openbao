@@ -41,7 +41,7 @@ func TestTransactionalStorageBasics(t *testing.T) {
 	require.NoError(t, err, "Failed to create transactional storage")
 
 	// Create transactional storage
-	storage, err := NewTransactionalNodeStorage("bptree_tx", s, nil, 100)
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 
 	// Check if storage supports transactions
@@ -118,7 +118,7 @@ func TestTransactionalStorageReadOnly(t *testing.T) {
 	s, err := createTransactionalStorage()
 	require.NoError(t, err, "Failed to create transactional storage")
 
-	storage, err := NewTransactionalNodeStorage("bptree_readonly", s, nil, 100)
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 
 	txnStorage := storage.(TransactionalStorage)
@@ -185,7 +185,7 @@ func TestTransactionalStorageIsolation(t *testing.T) {
 	s, err := createTransactionalStorage()
 	require.NoError(t, err, "Failed to create transactional storage")
 
-	storage, err := NewTransactionalNodeStorage("bptree_isolation", s, nil, 100)
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 
 	txnStorage := storage.(TransactionalStorage)
@@ -244,7 +244,7 @@ func TestTransactionalStorageRollback(t *testing.T) {
 	s, err := createTransactionalStorage()
 	require.NoError(t, err, "Failed to create transactional storage")
 
-	storage, err := NewTransactionalNodeStorage("bptree_rollback", s, nil, 100)
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 
 	txnStorage := storage.(TransactionalStorage)
@@ -286,7 +286,7 @@ func TestTransactionalStorageCommit(t *testing.T) {
 	s, err := createTransactionalStorage()
 	require.NoError(t, err, "Failed to create transactional storage")
 
-	storage, err := NewTransactionalNodeStorage("bptree_commit", s, nil, 100)
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 
 	txnStorage := storage.(TransactionalStorage)
@@ -330,7 +330,7 @@ func TestTransactionalStorageCache(t *testing.T) {
 	s, err := createTransactionalStorage()
 	require.NoError(t, err, "Failed to create transactional storage")
 
-	storage, err := NewTransactionalNodeStorage("bptree_cache_tx", s, nil, 100)
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 
 	txnStorage := storage.(TransactionalStorage)
@@ -412,7 +412,7 @@ func TestTransactionalStorageConcurrency(t *testing.T) {
 	s, err := createTransactionalStorage()
 	require.NoError(t, err, "Failed to create transactional storage")
 
-	storage, err := NewTransactionalNodeStorage("bptree_concurrent", s, nil, 100)
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 
 	txnStorage := storage.(TransactionalStorage)
@@ -493,7 +493,7 @@ func TestWithTransactionHelper(t *testing.T) {
 	s, err := createTransactionalStorage()
 	require.NoError(t, err, "Failed to create transactional storage")
 
-	storage, err := NewTransactionalNodeStorage("bptree_helper", s, nil, 100)
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 	nodeStorage := storage.(*TransactionalNodeStorage)
 
@@ -561,7 +561,7 @@ func TestTransactionalStorageUtilityMethods(t *testing.T) {
 	s, err := createTransactionalStorage()
 	require.NoError(t, err, "Failed to create transactional storage")
 
-	storage, err := NewTransactionalNodeStorage("bptree_utils", s, nil, 100)
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 	nodeStorage := storage.(*TransactionalNodeStorage)
 	require.NoError(t, err, "Failed to create storage")

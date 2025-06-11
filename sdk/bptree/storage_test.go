@@ -16,7 +16,7 @@ import (
 func TestStorageOperations(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	nodeStorage, err := NewNodeStorage("bptree", s, nil, 100)
+	nodeStorage, err := NewNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage nodeStorage")
 
 	// Test SetRootID and GetRootID
@@ -70,7 +70,7 @@ func TestStorageOperations(t *testing.T) {
 func TestStoragenodeStorageCache(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	nodeStorage, err := NewNodeStorage("bptree_cache", s, nil, 100)
+	nodeStorage, err := NewNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage nodeStorage")
 
 	t.Run("CacheHit", func(t *testing.T) {
@@ -82,8 +82,9 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		err := nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
-		// Try to load the node from cache
-		cachedNode, ok := nodeStorage.cache.Get(node.ID)
+		// Try to load the node from cache using the proper cache key
+		cacheKey := nodeStorage.cacheKey(ctx, node.ID)
+		cachedNode, ok := nodeStorage.cache.Get(cacheKey)
 		require.True(t, ok, "Node should be in cache")
 		require.NotNil(t, cachedNode, "Cached node should not be empty")
 	})
@@ -97,8 +98,9 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		err := nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
-		// Verify the node is in cache
-		cachedNode, ok := nodeStorage.cache.Get(node.ID)
+		// Verify the node is in cache using the proper cache key
+		cacheKey := nodeStorage.cacheKey(ctx, node.ID)
+		cachedNode, ok := nodeStorage.cache.Get(cacheKey)
 		require.True(t, ok, "Node should be in cache")
 		require.Equal(t, node, cachedNode, "Cached node should match original")
 
@@ -107,8 +109,8 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		err = nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to update node")
 
-		// Verify the updated node is in cache
-		cachedNode, ok = nodeStorage.cache.Get(node.ID)
+		// Verify the updated node is in cache using the proper cache key
+		cachedNode, ok = nodeStorage.cache.Get(cacheKey)
 		require.True(t, ok, "Updated node should be in cache")
 		require.Equal(t, node, cachedNode, "Cached node should match updated version")
 	})
@@ -126,7 +128,8 @@ func TestStoragenodeStorageCache(t *testing.T) {
 
 		// Verify some nodes are in cache
 		recentNode := NewLeafNode("node-149")
-		cachedNode, ok := nodeStorage.cache.Get(recentNode.ID)
+		cacheKey := nodeStorage.cacheKey(ctx, recentNode.ID)
+		cachedNode, ok := nodeStorage.cache.Get(cacheKey)
 		require.True(t, ok, "Recent node should be in cache")
 		require.Equal(t, recentNode.ID, cachedNode.ID, "Cached node should match recent node")
 
@@ -146,8 +149,9 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		err := nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
 
-		// Verify node is in cache
-		cachedNode, ok := nodeStorage.cache.Get(node.ID)
+		// Verify node is in cache using the proper cache key
+		cacheKey := nodeStorage.cacheKey(ctx, node.ID)
+		cachedNode, ok := nodeStorage.cache.Get(cacheKey)
 		require.True(t, ok, "Node should be in cache")
 		require.Equal(t, node, cachedNode, "Cached node should match original")
 
@@ -155,8 +159,8 @@ func TestStoragenodeStorageCache(t *testing.T) {
 		err = nodeStorage.DeleteNode(ctx, node.ID)
 		require.NoError(t, err, "Failed to delete node")
 
-		// Verify node is removed from cache
-		_, ok = nodeStorage.cache.Get(node.ID)
+		// Verify node is removed from cache using the proper cache key
+		_, ok = nodeStorage.cache.Get(cacheKey)
 		require.False(t, ok, "Deleted node should not be in cache")
 	})
 
@@ -200,8 +204,9 @@ func TestStoragenodeStorageCache(t *testing.T) {
 					return
 				}
 
-				// Verify new node is in cache
-				cachedNode, ok := nodeStorage.cache.Get(newNode.ID)
+				// Verify new node is in cache using the proper cache key
+				cacheKey := nodeStorage.cacheKey(ctx, newNode.ID)
+				cachedNode, ok := nodeStorage.cache.Get(cacheKey)
 				if !ok {
 					errChan <- fmt.Errorf("new node not found in cache")
 					return

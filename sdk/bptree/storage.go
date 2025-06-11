@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -36,7 +35,6 @@ var _ Storage = &NodeStorage{}
 
 // NodeStorage adapts the logical.Storage interface to the bptree.Storage interface
 type NodeStorage struct {
-	prefix             string
 	storage            logical.Storage
 	serializer         NodeSerializer
 	nodesLock          sync.RWMutex
@@ -72,15 +70,10 @@ func (s *JSONSerializer) Deserialize(data []byte) (*Node, error) {
 
 // NewNodeStorage creates a new adapter for the logical.Storage interface
 func NewNodeStorage(
-	prefix string,
 	storage logical.Storage,
 	serializer NodeSerializer,
 	cacheSize int,
 ) (*NodeStorage, error) {
-	if !strings.HasSuffix(prefix, "/") {
-		prefix = prefix + "/"
-	}
-
 	if serializer == nil {
 		serializer = &JSONSerializer{}
 	}
@@ -91,7 +84,6 @@ func NewNodeStorage(
 	}
 
 	return &NodeStorage{
-		prefix:     prefix,
 		storage:    storage,
 		serializer: serializer,
 		cache:      cache,
@@ -101,12 +93,11 @@ func NewNodeStorage(
 // NewTransactionalNodeStorage creates a new transactional adapter for the logical.Storage interface
 // if the underlying storage supports transactions. Otherwise, it returns a regular NodeStorage.
 func NewTransactionalNodeStorage(
-	prefix string,
 	storage logical.Storage,
 	serializer NodeSerializer,
 	cacheSize int,
 ) (Storage, error) {
-	nodeStorage, err := NewNodeStorage(prefix, storage, serializer, cacheSize)
+	nodeStorage, err := NewNodeStorage(storage, serializer, cacheSize)
 	if err != nil {
 		return nil, err
 	}
@@ -122,13 +113,31 @@ func NewTransactionalNodeStorage(
 	return nodeStorage, nil
 }
 
+// nodeKey constructs the storage key for a node, using tree ID from context if available
+func (s *NodeStorage) nodeKey(ctx context.Context, nodeID string) string {
+	treeID := GetTreeIDOrDefault(ctx, DefaultTreeID)
+	return treeID + "/" + nodesPath + "/" + nodeID
+}
+
+// rootKey constructs the storage key for the root ID, using tree ID from context if available
+func (s *NodeStorage) rootKey(ctx context.Context) string {
+	treeID := GetTreeIDOrDefault(ctx, DefaultTreeID)
+	return treeID + "/" + metadataPath + "/" + rootPath
+}
+
+// cacheKey constructs the cache key for a node, using tree ID from context if available
+func (s *NodeStorage) cacheKey(ctx context.Context, nodeID string) string {
+	treeID := GetTreeIDOrDefault(ctx, DefaultTreeID)
+	return treeID + ":" + nodeID
+}
+
 // GetRootID gets the ID of the root node
 func (s *NodeStorage) GetRootID(ctx context.Context) (string, error) {
 	// Lock the root
 	s.rootLock.RLock()
 	defer s.rootLock.RUnlock()
 
-	path := s.prefix + metadataPath + "/" + rootPath
+	path := s.rootKey(ctx)
 	entry, err := s.storage.Get(ctx, path)
 	if err != nil {
 		return "", fmt.Errorf("failed to get root ID: %w", err)
@@ -147,7 +156,7 @@ func (s *NodeStorage) SetRootID(ctx context.Context, id string) error {
 	s.rootLock.Lock()
 	defer s.rootLock.Unlock()
 
-	path := s.prefix + metadataPath + "/" + rootPath
+	path := s.rootKey(ctx)
 	entry := &logical.StorageEntry{
 		Key:   path,
 		Value: []byte(id),
@@ -168,13 +177,14 @@ func (s *NodeStorage) LoadNode(ctx context.Context, id string) (*Node, error) {
 
 	// Try to get from cache first (unless cache is disabled)
 	if !s.skipCache {
-		if node, ok := s.cache.Get(id); ok {
+		cacheKey := s.cacheKey(ctx, id)
+		if node, ok := s.cache.Get(cacheKey); ok {
 			return node, nil
 		}
 	}
 
 	// Load from storage
-	path := s.prefix + nodesPath + "/" + id
+	path := s.nodeKey(ctx, id)
 	entry, err := s.storage.Get(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load node %s: %w", id, err)
@@ -191,7 +201,8 @@ func (s *NodeStorage) LoadNode(ctx context.Context, id string) (*Node, error) {
 
 	// Cache the loaded node (immediate for non-transactional, queued for transactional)
 	if !s.skipCache {
-		s.applyCacheOp(CacheOpAdd, id, node)
+		cacheKey := s.cacheKey(ctx, id)
+		s.applyCacheOp(CacheOpAdd, cacheKey, node)
 	}
 
 	return node, nil
@@ -213,7 +224,7 @@ func (s *NodeStorage) SaveNode(ctx context.Context, node *Node) error {
 		return fmt.Errorf("failed to serialize node %s: %w", node.ID, err)
 	}
 
-	path := s.prefix + nodesPath + "/" + node.ID
+	path := s.nodeKey(ctx, node.ID)
 	entry := &logical.StorageEntry{
 		Key:   path,
 		Value: data,
@@ -225,7 +236,8 @@ func (s *NodeStorage) SaveNode(ctx context.Context, node *Node) error {
 
 	// Cache the saved node (immediate for non-transactional, queued for transactional)
 	if !s.skipCache {
-		s.applyCacheOp(CacheOpAdd, node.ID, node)
+		cacheKey := s.cacheKey(ctx, node.ID)
+		s.applyCacheOp(CacheOpAdd, cacheKey, node)
 	}
 
 	return nil
@@ -237,14 +249,15 @@ func (s *NodeStorage) DeleteNode(ctx context.Context, id string) error {
 	s.nodesLock.Lock()
 	defer s.nodesLock.Unlock()
 
-	path := s.prefix + nodesPath + "/" + id
+	path := s.nodeKey(ctx, id)
 	if err := s.storage.Delete(ctx, path); err != nil {
 		return fmt.Errorf("failed to delete node %s: %w", id, err)
 	}
 
 	// Remove from cache (immediate for non-transactional, queued for transactional)
 	if !s.skipCache {
-		s.applyCacheOp(CacheOpDelete, id, nil)
+		cacheKey := s.cacheKey(ctx, id)
+		s.applyCacheOp(CacheOpDelete, cacheKey, nil)
 	}
 
 	return nil
@@ -377,7 +390,6 @@ func (s *TransactionalNodeStorage) BeginReadOnlyTx(ctx context.Context) (Transac
 
 	return &NodeTransaction{
 		NodeStorage: &NodeStorage{
-			prefix:     s.prefix,
 			storage:    tx,
 			serializer: s.serializer,
 			cache:      s.cache, // Share cache for read-only transactions
@@ -399,7 +411,6 @@ func (s *TransactionalNodeStorage) BeginTx(ctx context.Context) (Transaction, er
 
 	return &NodeTransaction{
 		NodeStorage: &NodeStorage{
-			prefix:     s.prefix,
 			storage:    tx,
 			serializer: s.serializer,
 			cache:      s.cache, // Share cache within transactions
