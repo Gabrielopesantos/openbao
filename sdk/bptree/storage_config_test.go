@@ -50,7 +50,7 @@ func TestTreeConfigPersistence(t *testing.T) {
 		require.NoError(t, err, "Should load existing tree with matching config")
 
 		// Verify data is accessible
-		values, found, err := tree2.Get(ctx, storage, "key1")
+		values, found, err := tree2.Search(ctx, storage, "key1")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, []string{"value1"}, values)
@@ -76,7 +76,7 @@ func TestTreeConfigPersistence(t *testing.T) {
 		require.Equal(t, 12, tree2.config.Order, "Should use stored order, not placeholder")
 
 		// Verify data is accessible
-		values, found, err := tree2.Get(ctx, storage, "key1")
+		values, found, err := tree2.Search(ctx, storage, "key1")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, []string{"value1"}, values)

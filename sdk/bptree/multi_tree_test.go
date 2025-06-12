@@ -39,34 +39,34 @@ func TestMultiTreeOperations(t *testing.T) {
 	require.NoError(t, err, "Failed to insert into tree2")
 
 	// Verify tree1 data
-	val, found, err := tree1.Get(ctx, storage, "key1")
+	val, found, err := tree1.Search(ctx, storage, "key1")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, []string{"tree1_value1"}, val)
 
-	val, found, err = tree1.Get(ctx, storage, "key2")
+	val, found, err = tree1.Search(ctx, storage, "key2")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, []string{"tree1_value2"}, val)
 
 	// key3 should not exist in tree1
-	_, found, err = tree1.Get(ctx, storage, "key3")
+	_, found, err = tree1.Search(ctx, storage, "key3")
 	require.NoError(t, err)
 	require.False(t, found)
 
 	// Verify tree2 data
-	val, found, err = tree2.Get(ctx, storage, "key1")
+	val, found, err = tree2.Search(ctx, storage, "key1")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, []string{"tree2_value1"}, val)
 
-	val, found, err = tree2.Get(ctx, storage, "key3")
+	val, found, err = tree2.Search(ctx, storage, "key3")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, []string{"tree2_value3"}, val)
 
 	// key2 should not exist in tree2
-	_, found, err = tree2.Get(ctx, storage, "key2")
+	_, found, err = tree2.Search(ctx, storage, "key2")
 	require.NoError(t, err)
 	require.False(t, found)
 }

@@ -28,7 +28,7 @@ func TestTreePersistenceAndLoading(t *testing.T) {
 		err = tree.Insert(ctx, storage, "key1", "value1")
 		require.NoError(t, err, "Should be able to insert into new tree")
 
-		values, found, err := tree.Get(ctx, storage, "key1")
+		values, found, err := tree.Search(ctx, storage, "key1")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, []string{"value1"}, values)
@@ -61,7 +61,7 @@ func TestTreePersistenceAndLoading(t *testing.T) {
 
 		// Verify all data is still accessible
 		for key, expectedValue := range testData {
-			values, found, err := tree2.Get(ctx, storage, key)
+			values, found, err := tree2.Search(ctx, storage, key)
 			require.NoError(t, err, "Error getting key %s", key)
 			require.True(t, found, "Should find key %s after reload", key)
 			require.Equal(t, []string{expectedValue}, values, "Value mismatch for key %s", key)
@@ -71,7 +71,7 @@ func TestTreePersistenceAndLoading(t *testing.T) {
 		err = tree2.Insert(ctx, storage, "key4", "value4")
 		require.NoError(t, err, "Should be able to insert into loaded tree")
 
-		values, found, err := tree2.Get(ctx, storage, "key4")
+		values, found, err := tree2.Search(ctx, storage, "key4")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, []string{"value4"}, values)
@@ -113,7 +113,7 @@ func TestTreePersistenceAndLoading(t *testing.T) {
 		require.NotNil(t, tree2)
 
 		// Verify data is accessible
-		values, found, err := tree2.Get(ctx, storage, "persistent")
+		values, found, err := tree2.Search(ctx, storage, "persistent")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, []string{"data"}, values)
@@ -157,30 +157,30 @@ func TestTreePersistenceAndLoading(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify isolation is maintained
-		values, found, err := reloadedTree1.Get(ctx, storage, "shared_key")
+		values, found, err := reloadedTree1.Search(ctx, storage, "shared_key")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, []string{"alpha_value"}, values, "Tree 1 should have its own value")
 
-		values, found, err = reloadedTree2.Get(ctx, storage, "shared_key")
+		values, found, err = reloadedTree2.Search(ctx, storage, "shared_key")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, []string{"beta_value"}, values, "Tree 2 should have its own value")
 
 		// Verify tree-specific keys
-		_, found, err = reloadedTree1.Get(ctx, storage, "alpha_only")
+		_, found, err = reloadedTree1.Search(ctx, storage, "alpha_only")
 		require.NoError(t, err)
 		require.True(t, found, "Tree 1 should have its specific key")
 
-		_, found, err = reloadedTree1.Get(ctx, storage, "beta_only")
+		_, found, err = reloadedTree1.Search(ctx, storage, "beta_only")
 		require.NoError(t, err)
 		require.False(t, found, "Tree 1 should not have tree 2's key")
 
-		_, found, err = reloadedTree2.Get(ctx, storage, "beta_only")
+		_, found, err = reloadedTree2.Search(ctx, storage, "beta_only")
 		require.NoError(t, err)
 		require.True(t, found, "Tree 2 should have its specific key")
 
-		_, found, err = reloadedTree2.Get(ctx, storage, "alpha_only")
+		_, found, err = reloadedTree2.Search(ctx, storage, "alpha_only")
 		require.NoError(t, err)
 		require.False(t, found, "Tree 2 should not have tree 1's key")
 	})

@@ -22,53 +22,40 @@ type BPlusTree struct {
 	lock   sync.RWMutex     // Mutex to protect concurrent access
 }
 
-// LoadExistingBPlusTree loads an existing B+ tree from storage using the stored configuration
-// as the source of truth. If the tree doesn't exist, returns an error.
-func LoadExistingBPlusTree(
+// InitializeBPlusTree initializes a tree, creating it if it doesn't exist or loading it if it does.
+// For new trees, the provided config is used. For existing trees, stored config is used and only the TreeID is used.
+func InitializeBPlusTree(
 	ctx context.Context,
 	storage Storage,
-	treeID string,
+	config *BPlusTreeConfig,
 ) (*BPlusTree, error) {
-	if treeID == "" {
-		return nil, fmt.Errorf("treeID cannot be empty")
+	if config == nil {
+		config = NewDefaultBPlusTreeConfig()
+	} else if err := validateConfig(config); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	ctx = WithTreeID(ctx, treeID)
-
-	// Get stored configuration - this is the source of truth
-	storedConfig, err := storage.GetTreeConfig(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load tree configuration: %w", err)
-	}
-	if storedConfig == nil {
-		return nil, fmt.Errorf("tree '%s' does not exist", treeID)
+	// Try to load existing tree first
+	existingTree, err := LoadExistingBPlusTree(ctx, storage, config.TreeID)
+	if err == nil {
+		return existingTree, nil
 	}
 
-	// Create tree with stored configuration
-	tree := &BPlusTree{
-		config: storedConfig,
-	}
+	// If tree doesn't exist, create it
+	return NewBPlusTree(ctx, storage, config)
+}
 
-	// Validate tree structure
-	ctx = tree.contextWithTreeID(ctx)
+// getRoot loads the root node from storage
+func (t *BPlusTree) getRoot(ctx context.Context, storage Storage) (*Node, error) {
 	rootID, err := storage.GetRootID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root ID: %w", err)
 	}
 	if rootID == "" {
-		return nil, fmt.Errorf("tree metadata exists but no root node found - tree may be corrupted")
+		return nil, errors.New("root node not found")
 	}
 
-	// Validate root node exists
-	rootNode, err := storage.LoadNode(ctx, rootID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load root node: %w", err)
-	}
-	if rootNode == nil || rootNode.ID != rootID {
-		return nil, fmt.Errorf("root node validation failed")
-	}
-
-	return tree, nil
+	return storage.LoadNode(ctx, rootID)
 }
 
 // NewBPlusTree creates a new B+ tree with the given configuration.
@@ -118,40 +105,53 @@ func NewBPlusTree(
 	return tree, nil
 }
 
-// InitializeBPlusTree initializes a tree, creating it if it doesn't exist or loading it if it does.
-// For new trees, the provided config is used. For existing trees, stored config is used and only the TreeID is used.
-func InitializeBPlusTree(
+// LoadExistingBPlusTree loads an existing B+ tree from storage using the stored configuration
+// as the source of truth. If the tree doesn't exist, returns an error.
+func LoadExistingBPlusTree(
 	ctx context.Context,
 	storage Storage,
-	config *BPlusTreeConfig,
+	treeID string,
 ) (*BPlusTree, error) {
-	if config == nil {
-		config = NewDefaultBPlusTreeConfig()
-	} else if err := validateConfig(config); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+	if treeID == "" {
+		return nil, fmt.Errorf("treeID cannot be empty")
 	}
 
-	// Try to load existing tree first
-	existingTree, err := LoadExistingBPlusTree(ctx, storage, config.TreeID)
-	if err == nil {
-		return existingTree, nil
+	ctx = WithTreeID(ctx, treeID)
+
+	// Get stored configuration - this is the source of truth
+	storedConfig, err := storage.GetTreeConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load tree configuration: %w", err)
+	}
+	if storedConfig == nil {
+		return nil, fmt.Errorf("tree '%s' does not exist", treeID)
 	}
 
-	// If tree doesn't exist, create it
-	return NewBPlusTree(ctx, storage, config)
-}
+	// Create tree with stored configuration
+	tree := &BPlusTree{
+		config: storedConfig,
+	}
 
-// getRoot loads the root node from storage
-func (t *BPlusTree) getRoot(ctx context.Context, storage Storage) (*Node, error) {
+	// Validate tree structure
+	ctx = tree.contextWithTreeID(ctx)
 	rootID, err := storage.GetRootID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root ID: %w", err)
 	}
 	if rootID == "" {
-		return nil, errors.New("root node not found")
+		return nil, fmt.Errorf("tree metadata exists but no root node found - tree may be corrupted")
 	}
 
-	return storage.LoadNode(ctx, rootID)
+	// Validate root node exists
+	rootNode, err := storage.LoadNode(ctx, rootID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load root node: %w", err)
+	}
+	if rootNode == nil || rootNode.ID != rootID {
+		return nil, fmt.Errorf("root node validation failed")
+	}
+
+	return tree, nil
 }
 
 // contextWithTreeID returns a context with the tree's ID added, enabling multi-tree storage
@@ -159,6 +159,7 @@ func (t *BPlusTree) contextWithTreeID(ctx context.Context) context.Context {
 	if t.config.TreeID != "" {
 		return WithTreeID(ctx, t.config.TreeID)
 	}
+
 	return ctx
 }
 
@@ -192,14 +193,31 @@ func (t *BPlusTree) nodeUnderflows(node *Node) bool {
 	return len(node.Keys) < t.minKeys()
 }
 
-// NOTE (gabrielopesantos): Rename this method
-// Get retrieves all values for a key
-func (t *BPlusTree) Get(ctx context.Context, storage Storage, key string) ([]string, bool, error) {
+// Search retrieves all values for a key
+// If the key is not found, it returns an empty slice and false
+func (t *BPlusTree) Search(ctx context.Context, storage Storage, key string) ([]string, bool, error) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
 	ctx = t.contextWithTreeID(ctx)
-	return t.get(ctx, storage, key)
+	return t.search(ctx, storage, key)
+}
+
+func (t *BPlusTree) search(ctx context.Context, storage Storage, key string) ([]string, bool, error) {
+	leaf, err := t.findLeafNode(ctx, storage, key)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to find leaf node: %w", err)
+	}
+
+	// If we get here, we are at a leaf node
+	idx, indexFound := leaf.findKeyIndex(key)
+	if indexFound {
+		// If the key is found, return the values
+		return leaf.Values[idx], true, nil
+	}
+
+	// Key not found is a valid state, not an error
+	return nil, false, nil
 }
 
 // SearchPrefix returns all key-value pairs that start with the given prefix
@@ -288,24 +306,6 @@ func (t *BPlusTree) SearchPrefix(ctx context.Context, storage Storage, prefix st
 	}
 
 	return results, nil
-}
-
-func (t *BPlusTree) get(ctx context.Context, storage Storage, key string) ([]string, bool, error) {
-	// Load the root node
-	leaf, err := t.findLeafNode(ctx, storage, key)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to find leaf node: %w", err)
-	}
-
-	// If we get here, we are at a leaf node
-	idx, indexFound := leaf.findKeyIndex(key)
-	if indexFound {
-		// If the key is found, return the values
-		return leaf.Values[idx], true, nil
-	}
-
-	// Key not found is a valid state, not an error
-	return nil, false, nil
 }
 
 // Insert inserts a key-value pair
@@ -441,6 +441,7 @@ func (t *BPlusTree) DeleteValue(ctx context.Context, storage Storage, key string
 // findLeafNode finds the leaf node where a key belongs
 func (t *BPlusTree) findLeafNode(ctx context.Context, storage Storage, key string) (*Node, error) {
 	ctx = t.contextWithTreeID(ctx)
+	// Load the root node
 	node, err := t.getRoot(ctx, storage)
 	if err != nil {
 		return nil, err
