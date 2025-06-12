@@ -18,8 +18,9 @@ var ErrValueNotFound = errors.New("value not found")
 
 // BPlusTree represents a B+ tree data structure
 type BPlusTree struct {
-	config *BPlusTreeConfig // Configuration for the B+ tree
-	lock   sync.RWMutex     // Mutex to protect concurrent access
+	config       *BPlusTreeConfig // Configuration for the B+ tree
+	lock         sync.RWMutex     // Mutex to protect concurrent access
+	cachedRootID string           // Cached root ID
 }
 
 // InitializeBPlusTree initializes a tree, creating it if it doesn't exist or loading it if it does.
@@ -47,7 +48,7 @@ func InitializeBPlusTree(
 
 // getRoot loads the root node from storage
 func (t *BPlusTree) getRoot(ctx context.Context, storage Storage) (*Node, error) {
-	rootID, err := storage.GetRootID(ctx)
+	rootID, err := t.getRootID(ctx, storage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -56,6 +57,38 @@ func (t *BPlusTree) getRoot(ctx context.Context, storage Storage) (*Node, error)
 	}
 
 	return storage.LoadNode(ctx, rootID)
+}
+
+// getRootID returns the root ID, using cache when possible
+func (t *BPlusTree) getRootID(ctx context.Context, storage Storage) (string, error) {
+	// Check if we have a valid cached root ID
+	if t.cachedRootID != "" {
+		return t.cachedRootID, nil
+	}
+
+	// Load from storage and cache
+	rootID, err := storage.GetRootID(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// Update cache
+	t.cachedRootID = rootID
+
+	return rootID, nil
+}
+
+// setCachedRootID updates both storage and cache
+func (t *BPlusTree) setCachedRootID(ctx context.Context, storage Storage, newRootID string) error {
+	// Update storage first
+	if err := storage.SetRootID(ctx, newRootID); err != nil {
+		return err
+	}
+
+	// Update cache on successful storage update
+	t.cachedRootID = newRootID
+
+	return nil
 }
 
 // NewBPlusTree creates a new B+ tree with the given configuration.
@@ -93,7 +126,7 @@ func NewBPlusTree(
 	}
 
 	// Set root ID
-	if err := storage.SetRootID(ctx, rootNode.ID); err != nil {
+	if err := tree.setCachedRootID(ctx, storage, rootNode.ID); err != nil {
 		return nil, fmt.Errorf("failed to set root ID: %w", err)
 	}
 
@@ -134,7 +167,7 @@ func LoadExistingBPlusTree(
 
 	// Validate tree structure
 	ctx = tree.contextWithTreeID(ctx)
-	rootID, err := storage.GetRootID(ctx)
+	rootID, err := tree.getRootID(ctx, storage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -369,7 +402,7 @@ func (t *BPlusTree) Delete(ctx context.Context, storage Storage, key string) err
 	}
 
 	// Handle underflow if the node is not the root and has too few keys
-	rootID, err := storage.GetRootID(ctx)
+	rootID, err := t.getRootID(ctx, storage)
 	if err != nil {
 		return fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -422,7 +455,7 @@ func (t *BPlusTree) DeleteValue(ctx context.Context, storage Storage, key string
 			}
 
 			// Handle underflow if the node is not the root and has too few keys
-			rootID, err := storage.GetRootID(ctx)
+			rootID, err := t.getRootID(ctx, storage)
 			if err != nil {
 				return fmt.Errorf("failed to get root ID: %w", err)
 			}
@@ -503,7 +536,7 @@ func (t *BPlusTree) splitLeafNode(leaf *Node) (*Node, string) {
 // insertIntoParent inserts a key and right node into the parent of left node
 func (t *BPlusTree) insertIntoParent(ctx context.Context, storage Storage, leftNode *Node, rightNode *Node, splitKey string) error {
 	// If leftNode is the root, create a new root
-	rootID, err := storage.GetRootID(ctx)
+	rootID, err := t.getRootID(ctx, storage)
 	if err != nil {
 		return fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -528,7 +561,7 @@ func (t *BPlusTree) insertIntoParent(ctx context.Context, storage Storage, leftN
 		}
 
 		// Update root ID in storage
-		return storage.SetRootID(ctx, newRoot.ID)
+		return t.setCachedRootID(ctx, storage, newRoot.ID)
 	}
 
 	// Load parent node
@@ -611,14 +644,14 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node
 // handleUnderflow handles underflow in a node by trying to borrow from siblings or merge
 func (t *BPlusTree) handleUnderflow(ctx context.Context, storage Storage, node *Node) error {
 	// If it's the root node, no underflow handling needed
-	rootID, err := storage.GetRootID(ctx)
+	rootID, err := t.getRootID(ctx, storage)
 	if err != nil {
 		return fmt.Errorf("failed to get root ID: %w", err)
 	}
 	if node.ID == rootID {
 		// Root can have fewer keys, but if it's empty and has children, promote the only child
 		if !node.IsLeaf && len(node.Keys) == 0 && len(node.ChildrenIDs) == 1 {
-			return storage.SetRootID(ctx, node.ChildrenIDs[0])
+			return t.setCachedRootID(ctx, storage, node.ChildrenIDs[0])
 		}
 		return nil
 	}
@@ -862,7 +895,7 @@ func (t *BPlusTree) mergeLeafNodes(ctx context.Context, storage Storage, node *N
 	}
 
 	// Check if parent underflows
-	rootID, err := storage.GetRootID(ctx)
+	rootID, err := t.getRootID(ctx, storage)
 	if err != nil {
 		return fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -938,7 +971,7 @@ func (t *BPlusTree) mergeInternalNodes(ctx context.Context, storage Storage, nod
 	}
 
 	// Check if parent underflows
-	rootID, err := storage.GetRootID(ctx)
+	rootID, err := t.getRootID(ctx, storage)
 	if err != nil {
 		return fmt.Errorf("failed to get root ID: %w", err)
 	}
