@@ -16,14 +16,14 @@ func TestMultiTreeOperations(t *testing.T) {
 	require.NoError(t, err, "Failed to create storage")
 
 	// Create two trees with different names
-	config1, err := NewNamedBPlusTreeConfig("tree1", 4)
+	config1, err := NewBPlusTreeConfig("tree1", 4)
 	require.NoError(t, err)
-	tree1, err := NewBPlusTree(ctx, storage, config1)
+	tree1, err := InitializeBPlusTree(ctx, storage, config1)
 	require.NoError(t, err, "Failed to create tree1")
 
-	config2, err := NewNamedBPlusTreeConfig("tree2", 4)
+	config2, err := NewBPlusTreeConfig("tree2", 4)
 	require.NoError(t, err)
-	tree2, err := NewBPlusTree(ctx, storage, config2)
+	tree2, err := InitializeBPlusTree(ctx, storage, config2)
 	require.NoError(t, err, "Failed to create tree2")
 
 	// Insert data into tree1

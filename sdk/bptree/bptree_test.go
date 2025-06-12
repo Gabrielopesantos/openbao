@@ -40,7 +40,7 @@ func TestBPlusTreeBasicOperations(t *testing.T) {
 	storage, err := NewNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage storage")
 
-	tree, err := NewBPlusTree(ctx, storage, NewDefaultBPlusTreeConfig())
+	tree, err := InitializeBPlusTree(ctx, storage, NewDefaultBPlusTreeConfig())
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	t.Run("EmptyTree", func(t *testing.T) {
@@ -88,7 +88,7 @@ func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
 
 	// Create a tree with small order to test splitting
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "splitting_test", Order: 3})
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert keys that will cause leaf splitting
@@ -165,7 +165,7 @@ func TestBPlusTreeDelete(t *testing.T) {
 	storage, err := NewNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage storage")
 
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "delete_test", Order: 4})
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert keys
@@ -234,7 +234,7 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 	require.NoError(t, err, "Failed to create storage storage")
 
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, storage, NewDefaultBPlusTreeConfig())
+	tree, err := InitializeBPlusTree(ctx, storage, NewDefaultBPlusTreeConfig())
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	const numKeys = 10000
@@ -290,7 +290,7 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 	require.NoError(t, err, "Failed to create storage storage")
 
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "concurrent_test", Order: 4})
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Test concurrent reads
@@ -460,7 +460,7 @@ func TestBPlusTreeEdgeCases(t *testing.T) {
 	require.NoError(t, err, "Failed to create storage storage")
 
 	ctx := context.Background()
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_test", Order: 3})
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	t.Run("SplitAtRoot", func(t *testing.T) {
@@ -530,7 +530,7 @@ func TestBPlusTreeStorageErrors(t *testing.T) {
 		shouldFail:  false,
 	}
 
-	tree, err := NewBPlusTree(ctx, mockstorage, &BPlusTreeConfig{Order: 4})
+	tree, err := InitializeBPlusTree(ctx, mockstorage, &BPlusTreeConfig{TreeID: "storage_errors_test", Order: 4})
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert some test data
@@ -590,7 +590,7 @@ func TestBPlusTreeDeleteValue(t *testing.T) {
 	storage, err := NewNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage storage")
 
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "delete_value_test", Order: 4})
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert a key with multiple values
@@ -653,8 +653,9 @@ func TestBPlusTreeDuplicateValues(t *testing.T) {
 	storage, err := NewNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage storage")
 
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "duplicate_values_test", Order: 4})
 	require.NoError(t, err, "Failed to create B+ tree")
+	ctx = WithTreeID(ctx, "duplicate_values_test")
 
 	// Insert initial values
 	err = tree.Insert(ctx, storage, "key1", "value1")
@@ -698,8 +699,9 @@ func TestNextIDLinking(t *testing.T) {
 	require.NoError(t, err, "Failed to create storage adapter")
 
 	// Use a small order to force splits
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "nextid_linking_test", Order: 3})
 	require.NoError(t, err, "Failed to create B+ tree")
+	ctx = WithTreeID(ctx, "nextid_linking_test")
 
 	t.Run("SingleLeafNode", func(t *testing.T) {
 		// Insert into root leaf - should have empty NextID initially
@@ -775,7 +777,7 @@ func TestSearchPrefix(t *testing.T) {
 	storage, err := NewNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage adapter")
 
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "search_prefix_test", Order: 4})
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	// Insert keys with various prefixes
@@ -834,7 +836,7 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 		storage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err)
 
-		tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_empty", Order: 4})
 		require.NoError(t, err)
 
 		// Search in empty tree
@@ -853,7 +855,7 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 		storage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err)
 
-		tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_empty_prefix", Order: 4})
 		require.NoError(t, err)
 
 		// Insert some keys
@@ -874,7 +876,7 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 		storage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err)
 
-		tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_special_chars", Order: 4})
 		require.NoError(t, err)
 
 		// Insert keys with special characters
@@ -916,7 +918,7 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 		storage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err)
 
-		tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_prefix_longer", Order: 4})
 		require.NoError(t, err)
 
 		// Insert short keys
@@ -938,7 +940,7 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 		storage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err)
 
-		tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_prefix_exact", Order: 4})
 		require.NoError(t, err)
 
 		// Insert keys where one exactly matches our search prefix
@@ -966,7 +968,7 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 		storage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err)
 
-		tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_case_sensitive", Order: 4})
 		require.NoError(t, err)
 
 		// Insert keys with different cases
@@ -999,7 +1001,7 @@ func TestSearchPrefixOptimizations(t *testing.T) {
 	storage, err := NewNodeStorage(s, nil, 100)
 	require.NoError(t, err)
 
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "search_prefix_optimizations", Order: 3})
 	require.NoError(t, err)
 
 	// Insert test data in sorted order
@@ -1049,7 +1051,7 @@ func TestSearchPrefixOptimizations(t *testing.T) {
 		emptyStorage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err)
 
-		emptyTree, err := NewBPlusTree(ctx, emptyStorage, &BPlusTreeConfig{Order: 3})
+		emptyTree, err := InitializeBPlusTree(ctx, emptyStorage, &BPlusTreeConfig{TreeID: "empty_tree_opt", Order: 3})
 		require.NoError(t, err)
 
 		results, err := emptyTree.SearchPrefix(ctx, emptyStorage, "any/prefix")
@@ -1086,8 +1088,9 @@ func TestSearchPrefixWithNextIDTraversal(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use very small order to force many splits and multiple leaf nodes
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "search_prefix_nextid", Order: 3})
 	require.NoError(t, err)
+	ctx = WithTreeID(ctx, "search_prefix_nextid")
 
 	// Insert many keys to create multiple leaf nodes
 	numKeys := 20
@@ -1137,7 +1140,7 @@ func TestSearchPrefixComprehensive(t *testing.T) {
 	storage, err := NewNodeStorage(s, nil, 100)
 	require.NoError(t, err)
 
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 4})
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "search_prefix_comprehensive", Order: 4})
 	require.NoError(t, err)
 
 	// Insert comprehensive test data

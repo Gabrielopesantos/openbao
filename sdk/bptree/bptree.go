@@ -47,16 +47,19 @@ var ErrValueNotFound = errors.New("value not found")
 // DefaultOrder is the default maximum number of children per B+ tree node
 const DefaultOrder = 32
 
-// BPlusTreeConfig holds configuration options for the B+ tree
+// BPlusTreeConfig holds configuration options for the B+ tree.
+// This struct serves both as runtime configuration and persistent metadata.
 type BPlusTreeConfig struct {
-	TreeID string // Tree name/identifier for multi-tree storage
-	Order  int    // Maximum number of children per node
+	TreeID  string `json:"tree_id"` // Tree name/identifier for multi-tree storage
+	Order   int    `json:"order"`   // Maximum number of children per node
+	Version int    `json:"version"` // Metadata version for future schema evolution
 }
 
 func NewDefaultBPlusTreeConfig() *BPlusTreeConfig {
 	return &BPlusTreeConfig{
-		TreeID: DefaultTreeID,
-		Order:  DefaultOrder,
+		TreeID:  DefaultTreeID,
+		Order:   DefaultOrder,
+		Version: 1,
 	}
 }
 
@@ -66,19 +69,9 @@ func NewBPlusTreeConfig(treeID string, order int) (*BPlusTreeConfig, error) {
 	}
 
 	return &BPlusTreeConfig{
-		TreeID: treeID,
-		Order:  order,
-	}, nil
-}
-
-func NewNamedBPlusTreeConfig(name string, order int) (*BPlusTreeConfig, error) {
-	if order < 3 {
-		return nil, fmt.Errorf("order must be at least 3, got %d", order)
-	}
-
-	return &BPlusTreeConfig{
-		TreeID: name,
-		Order:  order,
+		TreeID:  treeID,
+		Order:   order,
+		Version: 1, // Current metadata version
 	}, nil
 }
 
@@ -107,50 +100,123 @@ func (t *BPlusTree) contextWithTreeID(ctx context.Context) context.Context {
 	return ctx
 }
 
-// NewBPlusTree creates a new B+ tree with the specified order and comparison functions
+// LoadExistingBPlusTree loads an existing B+ tree from storage using the stored configuration
+// as the source of truth. If the tree doesn't exist, returns an error.
+func LoadExistingBPlusTree(
+	ctx context.Context,
+	storage Storage,
+	treeID string,
+) (*BPlusTree, error) {
+	if treeID == "" {
+		return nil, fmt.Errorf("treeID cannot be empty")
+	}
+
+	ctx = WithTreeID(ctx, treeID)
+
+	// Get stored configuration - this is the source of truth
+	storedConfig, err := storage.GetTreeConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load tree configuration: %w", err)
+	}
+	if storedConfig == nil {
+		return nil, fmt.Errorf("tree '%s' does not exist", treeID)
+	}
+
+	// Create tree with stored configuration
+	tree := &BPlusTree{
+		config: storedConfig,
+	}
+
+	// Validate tree structure
+	ctx = tree.contextWithTreeID(ctx)
+	rootID, err := storage.GetRootID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get root ID: %w", err)
+	}
+	if rootID == "" {
+		return nil, fmt.Errorf("tree metadata exists but no root node found - tree may be corrupted")
+	}
+
+	// Validate root node exists
+	rootNode, err := storage.LoadNode(ctx, rootID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load root node: %w", err)
+	}
+	if rootNode == nil || rootNode.ID != rootID {
+		return nil, fmt.Errorf("root node validation failed")
+	}
+
+	return tree, nil
+}
+
+// NewBPlusTree creates a new B+ tree with the given configuration.
+// Fails if a tree with the same ID already exists.
 func NewBPlusTree(
 	ctx context.Context,
 	storage Storage,
 	config *BPlusTreeConfig,
 ) (*BPlusTree, error) {
-	// Validate config
 	if config == nil {
-		config = NewDefaultBPlusTreeConfig()
-	} else {
-		if err := validateConfig(config); err != nil {
-			return nil, fmt.Errorf("invalid BPlusTreeConfig: %w", err)
-		}
+		return nil, fmt.Errorf("config is required for tree creation")
+	}
+	if err := validateConfig(config); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	tree := &BPlusTree{
 		config: config,
 	}
-
-	// Use tree-aware context for initialization
 	ctx = tree.contextWithTreeID(ctx)
 
-	// Initialize the tree with a root node
-	rootID, err := storage.GetRootID(ctx)
+	// Check if tree already exists
+	existingConfig, err := storage.GetTreeConfig(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get root ID: %w", err)
+		return nil, fmt.Errorf("failed to check for existing tree: %w", err)
+	}
+	if existingConfig != nil {
+		return nil, fmt.Errorf("tree '%s' already exists", config.TreeID)
 	}
 
-	if rootID == "" {
-		// Create a new root node
-		rootNode := NewLeafNode(genUUID())
+	// Create new root node
+	rootNode := NewLeafNode(genUUID())
+	if err := storage.SaveNode(ctx, rootNode); err != nil {
+		return nil, fmt.Errorf("failed to save root node: %w", err)
+	}
 
-		// Save the root node
-		if err := storage.SaveNode(ctx, rootNode); err != nil {
-			return nil, fmt.Errorf("failed to save root node: %w", err)
-		}
+	// Set root ID
+	if err := storage.SetRootID(ctx, rootNode.ID); err != nil {
+		return nil, fmt.Errorf("failed to set root ID: %w", err)
+	}
 
-		// Set the root ID
-		if err := storage.SetRootID(ctx, rootNode.ID); err != nil {
-			return nil, fmt.Errorf("failed to set root ID: %w", err)
-		}
+	// Store configuration
+	if err := storage.SetTreeConfig(ctx, config); err != nil {
+		return nil, fmt.Errorf("failed to store tree configuration: %w", err)
 	}
 
 	return tree, nil
+}
+
+// InitializeBPlusTree initializes a tree, creating it if it doesn't exist or loading it if it does.
+// For new trees, the provided config is used. For existing trees, stored config is used and only the TreeID is used.
+func InitializeBPlusTree(
+	ctx context.Context,
+	storage Storage,
+	config *BPlusTreeConfig,
+) (*BPlusTree, error) {
+	if config == nil {
+		config = NewDefaultBPlusTreeConfig()
+	} else if err := validateConfig(config); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	// Try to load existing tree first
+	existingTree, err := LoadExistingBPlusTree(ctx, storage, config.TreeID)
+	if err == nil {
+		return existingTree, nil
+	}
+
+	// If tree doesn't exist, create it
+	return NewBPlusTree(ctx, storage, config)
 }
 
 // getRoot loads the root node from storage
@@ -444,6 +510,7 @@ func (t *BPlusTree) DeleteValue(ctx context.Context, storage Storage, key string
 
 // findLeafNode finds the leaf node where a key belongs
 func (t *BPlusTree) findLeafNode(ctx context.Context, storage Storage, key string) (*Node, error) {
+	ctx = t.contextWithTreeID(ctx)
 	node, err := t.getRoot(ctx, storage)
 	if err != nil {
 		return nil, err
@@ -556,7 +623,7 @@ func (t *BPlusTree) insertIntoParent(ctx context.Context, storage Storage, leftN
 		return fmt.Errorf("failed to save right node: %w", err)
 	}
 	if err := storage.SaveNode(ctx, parent); err != nil {
-		return fmt.Errorf("failed to save parent node: %w", err)
+		return fmt.Errorf("failed to save parent: %w", err)
 	}
 
 	// If the internal node is overfull, we need to split it

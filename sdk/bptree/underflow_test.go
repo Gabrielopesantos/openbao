@@ -15,7 +15,7 @@ func TestUnderflowHandling(t *testing.T) {
 	require.NoError(t, err, "Failed to create storage")
 
 	// Create a tree with small order to force underflow scenarios
-	tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3}) // order=3 means max 2 keys, min 1 key
+	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3}) // order=3 means max 2 keys, min 1 key
 	require.NoError(t, err, "Failed to create B+ tree")
 
 	t.Run("LeafUnderflowWithBorrowing", func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestUnderflowHandling(t *testing.T) {
 		storage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err, "Failed to create storage")
 
-		tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3}) // order=3 means max 2 keys, min 1 key
+		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3}) // order=3 means max 2 keys, min 1 key
 		require.NoError(t, err, "Failed to create B+ tree")
 
 		// Insert fewer keys to force merging scenario
@@ -96,7 +96,7 @@ func TestUnderflowHandling(t *testing.T) {
 		storage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err, "Failed to create storage")
 
-		tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3}) // order=3 means max 2 keys, min 1 key
+		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3}) // order=3 means max 2 keys, min 1 key
 		require.NoError(t, err, "Failed to create B+ tree")
 
 		// Insert keys with multiple values
@@ -135,7 +135,7 @@ func TestUnderflowHandling(t *testing.T) {
 		storage, err := NewNodeStorage(s, nil, 100)
 		require.NoError(t, err, "Failed to create storage")
 
-		tree, err := NewBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3}) // order=3 means max 2 keys, min 1 key
+		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{Order: 3}) // order=3 means max 2 keys, min 1 key
 		require.NoError(t, err, "Failed to create B+ tree")
 
 		// Insert and delete to test root underflow handling

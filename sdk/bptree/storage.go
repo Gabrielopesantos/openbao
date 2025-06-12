@@ -14,6 +14,7 @@ const (
 	nodesPath    = "nodes"
 	rootPath     = "root"
 	metadataPath = "metadata"
+	configPath   = "config" // Path for tree configuration metadata
 )
 
 type Storage interface {
@@ -27,6 +28,10 @@ type Storage interface {
 	SaveNode(ctx context.Context, node *Node) error
 	// DeleteNode deletes a node from storage
 	DeleteNode(ctx context.Context, id string) error
+	// GetTreeConfig gets the metadata for a tree
+	GetTreeConfig(ctx context.Context) (*BPlusTreeConfig, error)
+	// SetTreeConfig sets the metadata for a tree
+	SetTreeConfig(ctx context.Context, config *BPlusTreeConfig) error
 	// PurgeNodes clears all nodes from storage starting with the prefix
 	// PurgeNodes(ctx context.Context) error
 }
@@ -129,6 +134,12 @@ func (s *NodeStorage) rootKey(ctx context.Context) string {
 func (s *NodeStorage) cacheKey(ctx context.Context, nodeID string) string {
 	treeID := GetTreeIDOrDefault(ctx, DefaultTreeID)
 	return treeID + ":" + nodeID
+}
+
+// configKey constructs the storage key for tree metadata, using tree ID from context if available
+func (s *NodeStorage) configKey(ctx context.Context) string {
+	treeID := GetTreeIDOrDefault(ctx, DefaultTreeID)
+	return treeID + "/" + metadataPath + "/" + configPath
 }
 
 // GetRootID gets the ID of the root node
@@ -258,6 +269,52 @@ func (s *NodeStorage) DeleteNode(ctx context.Context, id string) error {
 	if !s.skipCache {
 		cacheKey := s.cacheKey(ctx, id)
 		s.applyCacheOp(CacheOpDelete, cacheKey, nil)
+	}
+
+	return nil
+}
+
+// GetTreeConfig gets the metadata for a tree
+func (s *NodeStorage) GetTreeConfig(ctx context.Context) (*BPlusTreeConfig, error) {
+	s.rootLock.RLock()
+	defer s.rootLock.RUnlock()
+
+	path := s.configKey(ctx)
+	entry, err := s.storage.Get(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tree metadata: %w", err)
+	}
+
+	if entry == nil {
+		return nil, nil // No metadata stored
+	}
+
+	var config BPlusTreeConfig
+	if err := json.Unmarshal(entry.Value, &config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal tree metadata: %w", err)
+	}
+
+	return &config, nil
+}
+
+// SetTreeConfig sets the metadata for a tree
+func (s *NodeStorage) SetTreeConfig(ctx context.Context, config *BPlusTreeConfig) error {
+	s.rootLock.Lock()
+	defer s.rootLock.Unlock()
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tree config: %w", err)
+	}
+
+	path := s.configKey(ctx)
+	entry := &logical.StorageEntry{
+		Key:   path,
+		Value: data,
+	}
+
+	if err := s.storage.Put(ctx, entry); err != nil {
+		return fmt.Errorf("failed to set tree config: %w", err)
 	}
 
 	return nil
