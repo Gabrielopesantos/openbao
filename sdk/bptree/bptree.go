@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"slices"
 	"strings"
@@ -1017,63 +1016,3 @@ func (t *BPlusTree) findRightmostLeaf(ctx context.Context, storage Storage) (*No
 //
 // 	return nil, nil // Not found
 // }
-
-// TODO (gsantos): Delete
-// Print prints a visual representation of the B+ tree
-func (t *BPlusTree) Print(storage Storage) error {
-	root, err := t.getRoot(context.Background(), storage)
-	if err != nil {
-		return err
-	}
-
-	return t.printNode(storage, root, "", true)
-}
-
-// TODO (gsantos): Delete
-// printNode recursively prints a node and its children
-func (t *BPlusTree) printNode(storage Storage, node *Node, prefix string, isLast bool) error {
-	getPrefix := func(isLast bool) string {
-		if isLast {
-			return "└── "
-		}
-		return "├── "
-	}
-
-	// Print the current node
-	if node.IsLeaf {
-		log.Printf("%s%s Leaf Node (ID: %s)\n", prefix, getPrefix(isLast), node.ID)
-		log.Printf("%s%s Keys: %v\n", prefix, getPrefix(isLast), node.Keys)
-		log.Printf("%s%s Values: %v\n", prefix, getPrefix(isLast), node.Values)
-	} else {
-		log.Printf("%s%s Internal Node (ID: %s)\n", prefix, getPrefix(isLast), node.ID)
-		log.Printf("%s%s Keys: %v\n", prefix, getPrefix(isLast), node.Keys)
-	}
-
-	// Print children for internal nodes
-	if !node.IsLeaf {
-		for i, childID := range node.ChildrenIDs {
-			child, err := storage.LoadNode(context.Background(), childID)
-			if err != nil {
-				return fmt.Errorf("failed to load child node %s: %w", childID, err)
-			}
-
-			// Determine if this is the last child
-			isLastChild := i == len(node.ChildrenIDs)-1
-
-			// Create the prefix for the next level
-			nextPrefix := prefix
-			if isLast {
-				nextPrefix += "    "
-			} else {
-				nextPrefix += "│   "
-			}
-
-			// Recursively print the child
-			if err := t.printNode(storage, child, nextPrefix, isLastChild); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
