@@ -22,18 +22,20 @@ type Storage interface {
 	GetRootID(ctx context.Context) (string, error)
 	// SetRootID sets the ID of the root node
 	SetRootID(ctx context.Context, id string) error
+
 	// LoadNode loads a node from storage
 	LoadNode(ctx context.Context, id string) (*Node, error)
 	// SaveNode saves a node to storage
 	SaveNode(ctx context.Context, node *Node) error
 	// DeleteNode deletes a node from storage
 	DeleteNode(ctx context.Context, id string) error
-	// GetTreeConfig gets the metadata for a tree
-	GetTreeConfig(ctx context.Context) (*BPlusTreeConfig, error)
-	// SetTreeConfig sets the metadata for a tree
-	SetTreeConfig(ctx context.Context, config *BPlusTreeConfig) error
 	// PurgeNodes clears all nodes from storage starting with the prefix
 	// PurgeNodes(ctx context.Context) error
+
+	// GetTreeConfig gets the config/metadata for a tree
+	GetTreeConfig(ctx context.Context) (*BPlusTreeConfig, error)
+	// SetTreeConfig sets the config/metadata for a tree
+	SetTreeConfig(ctx context.Context, config *BPlusTreeConfig) error
 }
 
 var _ Storage = &NodeStorage{}

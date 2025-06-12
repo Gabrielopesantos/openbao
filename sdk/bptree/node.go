@@ -44,7 +44,7 @@ func (n *Node) findKeyIndex(key string) (int, bool) {
 			return i, false
 		}
 	}
-	return len(n.Keys), false
+	return len(n.Keys), false // NOTE (gabrielopesantos): Review returning the length of Keys if not found
 }
 
 // insertKey inserts a key at the specified index
@@ -59,28 +59,29 @@ func (n *Node) insertKey(idx int, key string) {
 }
 
 // insertKeyValue inserts a key-value pair at the specified index (for leaf nodes only)
-// NOTE (gabrielopesantos): Return something?
+// NOTE (gabrielopesantos): Return something? / Needs to be reviewed
 func (n *Node) insertKeyValue(key string, value string) {
+	// Sanity check: ensure this is a leaf node
 	if n.IsLeaf {
-		// Key index is the index where the key should be inserted
-		idx, found := n.findKeyIndex(key)
-		if !found {
-			// Insert the key if it doesn't exist
-			n.insertKey(idx, key)
+		// Fetch the index where the key should be inserted
+		insertIdx, keyExists := n.findKeyIndex(key)
+		// Insert the key if it doesn't exist
+		if !keyExists {
+			n.insertKey(insertIdx, key)
 		}
 
 		// If we're inserting at an existing key, check for duplicates
-		if found {
+		if keyExists {
 			// Check if the value already exists and return early if it does
-			if slices.Contains(n.Values[idx], value) {
+			if slices.Contains(n.Values[insertIdx], value) {
 				return
 			}
-			n.Values[idx] = append(n.Values[idx], value)
+			n.Values[insertIdx] = append(n.Values[insertIdx], value)
 			return
 		}
 
 		// Insert new value slices
-		n.Values = slices.Insert(n.Values, idx, []string{value})
+		n.Values = slices.Insert(n.Values, insertIdx, []string{value})
 	}
 }
 
