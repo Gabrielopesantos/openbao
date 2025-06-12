@@ -11,93 +11,16 @@ import (
 	"sync"
 )
 
-// Context keys for tree identification
-type contextKey string
-
-const (
-	TreeIDContextKey contextKey = "bptree-tree-id"
-	DefaultTreeID    string     = "default"
-)
-
-// WithTreeID adds a tree ID to the context
-func WithTreeID(ctx context.Context, treeID string) context.Context {
-	return context.WithValue(ctx, TreeIDContextKey, treeID)
-}
-
-// GetTreeID extracts the tree ID from context, returns default if not found
-func GetTreeID(ctx context.Context) (string, bool) {
-	treeID, ok := ctx.Value(TreeIDContextKey).(string)
-	return treeID, ok
-}
-
-// GetTreeIDOrDefault extracts tree ID from context or returns a default
-func GetTreeIDOrDefault(ctx context.Context, defaultTreeID string) string {
-	if treeID, ok := GetTreeID(ctx); ok && treeID != "" {
-		return treeID
-	}
-	return defaultTreeID
-}
-
 // ErrKeyNotFound is returned when a key is not found in the tree
 var ErrKeyNotFound = errors.New("key not found")
 
 // ErrValueNotFound is returned when a value is not found in the tree
 var ErrValueNotFound = errors.New("value not found")
 
-// DefaultOrder is the default maximum number of children per B+ tree node
-const DefaultOrder = 32
-
-// BPlusTreeConfig holds configuration options for the B+ tree.
-// This struct serves both as runtime configuration and persistent metadata.
-type BPlusTreeConfig struct {
-	TreeID  string `json:"tree_id"` // Tree name/identifier for multi-tree storage
-	Order   int    `json:"order"`   // Maximum number of children per node
-	Version int    `json:"version"` // Metadata version for future schema evolution
-}
-
-func NewDefaultBPlusTreeConfig() *BPlusTreeConfig {
-	return &BPlusTreeConfig{
-		TreeID:  DefaultTreeID,
-		Order:   DefaultOrder,
-		Version: 1,
-	}
-}
-
-func NewBPlusTreeConfig(treeID string, order int) (*BPlusTreeConfig, error) {
-	if order < 3 {
-		return nil, fmt.Errorf("order must be at least 3, got %d", order)
-	}
-
-	return &BPlusTreeConfig{
-		TreeID:  treeID,
-		Order:   order,
-		Version: 1, // Current metadata version
-	}, nil
-}
-
-// validateConfig checks if the BPlusTreeConfig is valid
-func validateConfig(config *BPlusTreeConfig) error {
-	if config == nil {
-		return fmt.Errorf("BPlusTreeConfig cannot be nil")
-	}
-	if config.Order < 3 {
-		return fmt.Errorf("order must be at least 3, got %d", config.Order)
-	}
-	return nil
-}
-
 // BPlusTree represents a B+ tree data structure
 type BPlusTree struct {
 	config *BPlusTreeConfig // Configuration for the B+ tree
 	lock   sync.RWMutex     // Mutex to protect concurrent access
-}
-
-// contextWithTreeID returns a context with the tree's ID added, enabling multi-tree storage
-func (t *BPlusTree) contextWithTreeID(ctx context.Context) context.Context {
-	if t.config.TreeID != "" {
-		return WithTreeID(ctx, t.config.TreeID)
-	}
-	return ctx
 }
 
 // LoadExistingBPlusTree loads an existing B+ tree from storage using the stored configuration
@@ -230,6 +153,14 @@ func (t *BPlusTree) getRoot(ctx context.Context, storage Storage) (*Node, error)
 	}
 
 	return storage.LoadNode(ctx, rootID)
+}
+
+// contextWithTreeID returns a context with the tree's ID added, enabling multi-tree storage
+func (t *BPlusTree) contextWithTreeID(ctx context.Context) context.Context {
+	if t.config.TreeID != "" {
+		return WithTreeID(ctx, t.config.TreeID)
+	}
+	return ctx
 }
 
 // maxChildrenNodes returns the maximum number of children an internal node can have
