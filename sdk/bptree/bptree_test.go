@@ -43,8 +43,9 @@ func TestBPlusTreeBasicOperations(t *testing.T) {
 
 	t.Run("Delete", func(t *testing.T) {
 		// Delete key
-		err = tree.Delete(ctx, storage, "key1")
+		deleted, err := tree.Delete(ctx, storage, "key1")
 		require.NoError(t, err, "Failed to delete key")
+		require.True(t, deleted, "Should successfully delete key")
 
 		// Verify key was deleted
 		val, found, err := tree.Search(ctx, storage, "key1")
@@ -54,9 +55,9 @@ func TestBPlusTreeBasicOperations(t *testing.T) {
 	})
 
 	t.Run("DeleteNonExistentKey", func(t *testing.T) {
-		err = tree.Delete(ctx, storage, "nonexistent")
-		require.Error(t, err, "Deleting non-existent key should return error")
-		require.Equal(t, ErrKeyNotFound, err, "Should return ErrKeyNotFound")
+		deleted, err := tree.Delete(ctx, storage, "nonexistent")
+		require.Nil(t, err, "Should not error when deleting non-existent key")
+		require.False(t, deleted, "Should return false when deleting non-existent key")
 	})
 }
 
@@ -155,8 +156,9 @@ func TestBPlusTreeDelete(t *testing.T) {
 	}
 
 	// Test deleting from the middle
-	err = tree.Delete(ctx, storage, "c")
+	deleted, err := tree.Delete(ctx, storage, "c")
 	require.NoError(t, err, "Failed to delete key")
+	require.True(t, deleted, "Should successfully delete key 'c'")
 
 	// Verify deletion
 	_, found, err := tree.Search(ctx, storage, "c")
@@ -185,12 +187,14 @@ func TestBPlusTreeDelete(t *testing.T) {
 	}
 
 	// Delete first key
-	err = tree.Delete(ctx, storage, "a")
+	deleted, err = tree.Delete(ctx, storage, "a")
 	require.NoError(t, err, "Failed to delete first key")
+	require.True(t, deleted, "Should successfully delete first key")
 
 	// Delete last key
-	err = tree.Delete(ctx, storage, "e")
+	deleted, err = tree.Delete(ctx, storage, "e")
 	require.NoError(t, err, "Failed to delete last key")
+	require.True(t, deleted, "Should successfully delete last key")
 
 	// Verify only "b" and "d" remain
 	for _, key := range []string{"b", "d"} {
@@ -242,8 +246,9 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 
 	// Delete every other key (even indices)
 	for i := 0; i < numKeys; i += 2 {
-		err = tree.Delete(ctx, storage, keys[i])
+		deleted, err := tree.Delete(ctx, storage, keys[i])
 		require.NoError(t, err, "Failed to delete key %s", keys[i])
+		require.True(t, deleted, "Should successfully delete key %s", keys[i])
 	}
 
 	// Verify odd-indexed keys exist and even-indexed keys don't
@@ -397,7 +402,7 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 
-				err := tree.DeleteValue(ctx, storage, "100", fmt.Sprintf("value%d", i))
+				_, err := tree.DeleteValue(ctx, storage, "100", fmt.Sprintf("value%d", i))
 				if err != nil {
 					errChan <- fmt.Errorf("error deleting value %d: %w", i, err)
 					return
@@ -534,8 +539,9 @@ func TestBPlusTreeStorageErrors(t *testing.T) {
 
 	t.Run("StorageFailureDuringDelete", func(t *testing.T) {
 		mockstorage.shouldFail = true
-		err := tree.Delete(ctx, mockstorage, "key1")
+		deleted, err := tree.Delete(ctx, mockstorage, "key1")
 		require.Error(t, err, "Should error when storage fails")
+		require.False(t, deleted, "Delete should not succeed when storage fails")
 		require.Contains(t, err.Error(), "simulated storage error")
 		mockstorage.shouldFail = false
 	})
@@ -548,8 +554,9 @@ func TestBPlusTreeStorageErrors(t *testing.T) {
 		require.NoError(t, err)
 
 		mockstorage.shouldFail = true
-		err = tree.DeleteValue(ctx, mockstorage, "key3", "value1")
+		deleted, err := tree.DeleteValue(ctx, mockstorage, "key3", "value1")
 		require.Error(t, err, "Should error when storage fails")
+		require.False(t, deleted, "DeleteValue should not succeed when storage fails")
 		require.Contains(t, err.Error(), "simulated storage error")
 		mockstorage.shouldFail = false
 	})
@@ -587,8 +594,9 @@ func TestBPlusTreeDeleteValue(t *testing.T) {
 	require.Equal(t, []string{"value1", "value2", "value3"}, values, "Retrieved values should match inserted values")
 
 	// Delete a specific value
-	err = tree.DeleteValue(ctx, storage, "key1", "value2")
+	deleted, err := tree.DeleteValue(ctx, storage, "key1", "value2")
 	require.NoError(t, err, "Failed to delete value")
+	require.True(t, deleted, "Should successfully delete value")
 
 	// Verify the value was deleted
 	values, found, err = tree.Search(ctx, storage, "key1")
@@ -597,8 +605,9 @@ func TestBPlusTreeDeleteValue(t *testing.T) {
 	require.Equal(t, []string{"value1", "value3"}, values, "Retrieved values should not include deleted value")
 
 	// Delete another value
-	err = tree.DeleteValue(ctx, storage, "key1", "value1")
+	deleted, err = tree.DeleteValue(ctx, storage, "key1", "value1")
 	require.NoError(t, err, "Failed to delete second value")
+	require.True(t, deleted, "Should successfully delete second value")
 
 	// Verify the value was deleted
 	values, found, err = tree.Search(ctx, storage, "key1")
@@ -607,8 +616,9 @@ func TestBPlusTreeDeleteValue(t *testing.T) {
 	require.Equal(t, []string{"value3"}, values, "Retrieved values should only include remaining value")
 
 	// Delete the last value
-	err = tree.DeleteValue(ctx, storage, "key1", "value3")
+	deleted, err = tree.DeleteValue(ctx, storage, "key1", "value3")
 	require.NoError(t, err, "Failed to delete last value")
+	require.True(t, deleted, "Should successfully delete last value")
 
 	// Verify the key is no longer accessible
 	_, found, err = tree.Search(ctx, storage, "key1")
@@ -616,14 +626,14 @@ func TestBPlusTreeDeleteValue(t *testing.T) {
 	require.False(t, found, "Should not find key after all values deleted")
 
 	// Try to delete a non-existent value
-	err = tree.DeleteValue(ctx, storage, "key1", "nonexistent")
-	require.Error(t, err, "Deleting non-existent value should return error")
-	require.Equal(t, ErrKeyNotFound, err, "Should return ErrKeyNotFound")
+	deleted, err = tree.DeleteValue(ctx, storage, "key1", "nonexistent")
+	require.Nil(t, err, "Should not error when deleting non-existent value")
+	require.False(t, deleted, "DeleteValue should return false for non-existent value")
 
 	// Try to delete a value from a non-existent key
-	err = tree.DeleteValue(ctx, storage, "nonexistent", "value1")
-	require.Error(t, err, "Deleting value from non-existent key should return error")
-	require.Equal(t, ErrKeyNotFound, err, "Should return ErrKeyNotFound")
+	deleted, err = tree.DeleteValue(ctx, storage, "nonexistent", "value1")
+	require.Nil(t, err, "Should not error when deleting from non-existent key")
+	require.False(t, deleted, "DeleteValue should return false for non-existent key")
 }
 
 func TestBPlusTreeDuplicateValues(t *testing.T) {

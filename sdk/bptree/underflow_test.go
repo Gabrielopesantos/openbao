@@ -35,8 +35,9 @@ func TestUnderflowHandling(t *testing.T) {
 		}
 
 		// Delete a key that should cause underflow and borrowing
-		err = tree.Delete(ctx, storage, "20")
+		deleted, err := tree.Delete(ctx, storage, "20")
 		require.NoError(t, err, "Failed to delete key 20")
+		require.True(t, deleted, "Key 20 should have been deleted")
 
 		// Verify the key was deleted
 		_, found, err := tree.Search(ctx, storage, "20")
@@ -70,11 +71,13 @@ func TestUnderflowHandling(t *testing.T) {
 		}
 
 		// Delete keys to force underflow and merging
-		err = tree.Delete(ctx, storage, "20")
+		deleted, err := tree.Delete(ctx, storage, "20")
 		require.NoError(t, err, "Failed to delete key 20")
+		require.True(t, deleted, "Key 20 should have been deleted")
 
-		err = tree.Delete(ctx, storage, "30")
+		deleted, err = tree.Delete(ctx, storage, "30")
 		require.NoError(t, err, "Failed to delete key 30")
+		require.True(t, deleted, "Key 30 should have been deleted")
 
 		// Verify remaining key still exists
 		val, found, err := tree.Search(ctx, storage, "10")
@@ -109,11 +112,13 @@ func TestUnderflowHandling(t *testing.T) {
 		}
 
 		// Remove all values for a key by removing them individually
-		err = tree.DeleteValue(ctx, storage, "20", "value1_20")
+		deleted, err := tree.DeleteValue(ctx, storage, "20", "value1_20")
 		require.NoError(t, err, "Failed to delete value1 for key 20")
+		require.True(t, deleted, "Value1 for key 20 should have been deleted")
 
-		err = tree.DeleteValue(ctx, storage, "20", "value2_20")
+		deleted, err = tree.DeleteValue(ctx, storage, "20", "value2_20")
 		require.NoError(t, err, "Failed to delete value2 for key 20")
+		require.True(t, deleted, "Value2 for key 20 should have been deleted")
 
 		// Verify the key was completely removed
 		_, found, err := tree.Search(ctx, storage, "20")
@@ -142,8 +147,9 @@ func TestUnderflowHandling(t *testing.T) {
 		err = tree.Insert(ctx, storage, "10", "value10")
 		require.NoError(t, err, "Failed to insert key")
 
-		err = tree.Delete(ctx, storage, "10")
+		deleted, err := tree.Delete(ctx, storage, "10")
 		require.NoError(t, err, "Failed to delete key from root")
+		require.True(t, deleted, "Key 10 should have been deleted from root")
 
 		// Tree should still be valid (empty root)
 		_, found, err := tree.Search(ctx, storage, "10")

@@ -10,12 +10,6 @@ import (
 	"sync"
 )
 
-// ErrKeyNotFound is returned when a key is not found in the tree
-var ErrKeyNotFound = errors.New("key not found")
-
-// ErrValueNotFound is returned when a value is not found in the tree
-var ErrValueNotFound = errors.New("value not found")
-
 // BPlusTree represents a B+ tree data structure
 type BPlusTree struct {
 	config       *BPlusTreeConfig // Configuration for the B+ tree
@@ -120,7 +114,8 @@ func LoadExistingBPlusTree(
 		config: storedConfig,
 	}
 
-	// Validate tree structure
+	// TODO (gsantos): Validate tree structure
+	// We need to be careful here because a full validation might be too expensive...
 	ctx = tree.contextWithTreeID(ctx)
 	rootID, err := tree.getRootID(ctx, storage)
 	if err != nil {
@@ -354,7 +349,7 @@ func (t *BPlusTree) Insert(ctx context.Context, storage Storage, key string, val
 		return err
 	}
 
-	leaf.insertKeyValue(key, value)
+	_ = leaf.insertKeyValueAt(key, value)
 
 	// If the leaf has overflow, we need to split it
 	if t.nodeOverflows(leaf) {
@@ -379,101 +374,97 @@ func (t *BPlusTree) Insert(ctx context.Context, storage Storage, key string, val
 }
 
 // Delete removes all values for a key, if the key exists.
-func (t *BPlusTree) Delete(ctx context.Context, storage Storage, key string) error {
+// NOTE (gabrielopesantos): This implementation is not removing separator keys that were removed from the leaf node.
+func (t *BPlusTree) Delete(ctx context.Context, storage Storage, key string) (bool, error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
+	var entryDeleted bool
 	ctx = t.contextWithTreeID(ctx)
 	// Find the leaf node where the key belongs
 	leaf, err := t.findLeafNode(ctx, storage, key)
 	if err != nil {
-		return err
+		return entryDeleted, err
 	}
 
 	// Check if the key exists in the leaf node
 	idx, found := leaf.findKeyIndex(key)
 	if !found {
-		return ErrKeyNotFound
+		return entryDeleted, nil // Key not found, nothing to delete
 	}
 
 	// Delete the key-value pair
-	leaf.removeKeyValue(idx)
+	err = leaf.removeKeyEntryAt(idx)
+	if err != nil {
+		return entryDeleted, fmt.Errorf("failed to remove key entry: %w", err)
+	}
 
 	// Save the leaf node after deletion
 	if err := storage.SaveNode(ctx, leaf); err != nil {
-		return fmt.Errorf("failed to save leaf node: %w", err)
+		return entryDeleted, fmt.Errorf("failed to save leaf node: %w", err)
 	}
+	entryDeleted = true // Mark that we deleted an entry
 
 	// Handle underflow if the node is not the root and has too few keys
 	rootID, err := t.getRootID(ctx, storage)
 	if err != nil {
-		return fmt.Errorf("failed to get root ID: %w", err)
+		return entryDeleted, fmt.Errorf("failed to get root ID: %w", err)
 	}
 	if leaf.ID != rootID && t.nodeUnderflows(leaf) {
-		return t.handleUnderflow(ctx, storage, leaf)
+		return entryDeleted, t.handleUnderflow(ctx, storage, leaf)
 	}
 
-	return nil
+	return entryDeleted, nil
+}
+
+// DeleteValue removes a specific value for a key
+// NOTE (gabrielopesantos): This implementation is not removing separator keys that were removed from the leaf node.
+func (t *BPlusTree) DeleteValue(ctx context.Context, storage Storage, key string, value string) (bool, error) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	var valueDeleted bool
+	ctx = t.contextWithTreeID(ctx)
+	// Find the leaf node where the key belongs
+	leaf, err := t.findLeafNode(ctx, storage, key)
+	if err != nil {
+		return valueDeleted, err
+	}
+
+	// Check if the key exists in the leaf node
+	idx, found := leaf.findKeyIndex(key)
+	if !found {
+		return valueDeleted, nil
+	}
+
+	err = leaf.removeKeyValueAt(idx, value)
+	if err != nil {
+		return valueDeleted, fmt.Errorf("failed to remove value for key '%s': %w", key, err)
+	}
+
+	// Save the leaf node after deletion
+	if err := storage.SaveNode(ctx, leaf); err != nil {
+		return valueDeleted, fmt.Errorf("failed to save leaf node: %w", err)
+	}
+	valueDeleted = true
+
+	// Handle underflow if the node is not the root and has too few keys
+	rootID, err := t.getRootID(ctx, storage)
+	if err != nil {
+		return valueDeleted, fmt.Errorf("failed to get root ID to verify if the node is the root: %w", err)
+	}
+	if leaf.ID != rootID && t.nodeUnderflows(leaf) {
+		return valueDeleted, t.handleUnderflow(ctx, storage, leaf)
+	}
+
+	// Value not found
+	return valueDeleted, nil
 }
 
 // Purge removes all keys and values from the tree
 // func (t *BPlusTree[K, V]) Purge(ctx context.Context) error {
 // 	return nil
 // }
-
-// DeleteValue removes a specific value for a key
-func (t *BPlusTree) DeleteValue(ctx context.Context, storage Storage, key string, value string) error {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-
-	ctx = t.contextWithTreeID(ctx)
-	// Find the leaf node where the key belongs
-	leaf, err := t.findLeafNode(ctx, storage, key)
-	if err != nil {
-		return err
-	}
-
-	// Check if the key exists in the leaf node
-	idx, found := leaf.findKeyIndex(key)
-	if !found {
-		return ErrKeyNotFound
-	}
-
-	// Find the value in the slice of values
-	values := leaf.Values[idx]
-	for i, v := range values {
-		if v == value {
-			// Remove the value from the slice
-			values = slices.Delete(values, i, i+1)
-			if len(values) == 0 {
-				// If no values left, remove the key
-				leaf.removeKeyValue(idx)
-			} else {
-				// Otherwise, update the values
-				leaf.Values[idx] = values
-			}
-
-			// Save the leaf node after deletion
-			if err := storage.SaveNode(ctx, leaf); err != nil {
-				return fmt.Errorf("failed to save leaf node: %w", err)
-			}
-
-			// Handle underflow if the node is not the root and has too few keys
-			rootID, err := t.getRootID(ctx, storage)
-			if err != nil {
-				return fmt.Errorf("failed to get root ID: %w", err)
-			}
-			if leaf.ID != rootID && t.nodeUnderflows(leaf) {
-				return t.handleUnderflow(ctx, storage, leaf)
-			}
-
-			return nil
-		}
-	}
-
-	// Value not found
-	return ErrValueNotFound
-}
 
 // findLeafNode finds the leaf node where the key should be located.
 func (t *BPlusTree) findLeafNode(ctx context.Context, storage Storage, key string) (*Node, error) {
@@ -580,8 +571,7 @@ func (t *BPlusTree) insertIntoParent(ctx context.Context, storage Storage, leftN
 	insertPos, _ := parent.findKeyIndex(splitKey)
 
 	// Insert the split key and right node into the parent
-	parent.insertKey(insertPos, splitKey)
-	parent.insertChild(insertPos+1, rightNode.ID)
+	parent.insertKeyChildAt(insertPos, splitKey, rightNode.ID)
 
 	rightNode.ParentID = parent.ID
 
@@ -737,7 +727,7 @@ func (t *BPlusTree) borrowFromLeafSibling(ctx context.Context, storage Storage, 
 		borrowedValue := sibling.Values[len(sibling.Values)-1]
 
 		// Remove from sibling
-		sibling.removeKeyValue(len(sibling.Keys) - 1)
+		sibling.removeKeyEntryAt(len(sibling.Keys) - 1)
 
 		// Insert at beginning of node
 		node.Keys = slices.Insert(node.Keys, 0, borrowedKey)
@@ -751,7 +741,7 @@ func (t *BPlusTree) borrowFromLeafSibling(ctx context.Context, storage Storage, 
 		borrowedValue := sibling.Values[0]
 
 		// Remove from sibling
-		sibling.removeKeyValue(0)
+		sibling.removeKeyEntryAt(0)
 
 		// Insert at end of node
 		node.Keys = append(node.Keys, borrowedKey)
@@ -1033,27 +1023,3 @@ func (t *BPlusTree) findRightmostLeaf(ctx context.Context, storage Storage) (*No
 
 	return node, nil
 }
-
-// findPreviousLeaf finds the leaf node that should point to the given leaf in the NextID chain
-// func (t *BPlusTree) findPreviousLeaf(ctx context.Context, storage Storage, targetLeafID string) (*Node, error) {
-// 	leftmost, err := t.findLeftmostLeaf(ctx, storage)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-//
-// 	current := leftmost
-// 	for current != nil {
-// 		if current.NextID == targetLeafID {
-// 			return current, nil
-// 		}
-// 		if current.NextID == "" {
-// 			break
-// 		}
-// 		current, err = storage.LoadNode(ctx, current.NextID)
-// 		if err != nil {
-// 			return nil, fmt.Errorf("failed to load next leaf: %w", err)
-// 		}
-// 	}
-//
-// 	return nil, nil // Not found
-// }
