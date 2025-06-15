@@ -5,6 +5,22 @@ import (
 	"slices"
 )
 
+// RemovalResult represents the result of a removal operation
+type RemovalResult int
+
+const (
+	// NilRemovalResult indicates no removal occurred
+	Nil RemovalResult = iota
+	// ValueNotFound indicates the value was not found for the key
+	ValueNotFound
+	// ValueRemoved indicates a value was removed but the key still exists
+	ValueRemoved
+	// KeyRemoved indicates the entire key was removed
+	KeyRemoved
+	// KeyNotFound indicates the key was not found
+	KeyNotFound
+)
+
 var (
 	// ErrKeyIndexOutOfBounds is returned when an index for a key is out of bounds
 	ErrKeyIndexOutOfBounds = errors.New("key index out of bounds")
@@ -53,6 +69,201 @@ func NewInternalNode(id string) *Node {
 	}
 }
 
+// High-level query operations
+
+// HasKey returns true if the node contains the specified key
+func (n *Node) HasKey(key string) bool {
+	_, found := n.findKeyIndex(key)
+	return found
+}
+
+// GetValues returns all values associated with a key (leaf nodes only)
+func (n *Node) GetValues(key string) []string {
+	if !n.IsLeaf {
+		return nil
+	}
+
+	idx, found := n.findKeyIndex(key)
+	if !found {
+		return nil
+	}
+
+	// Return a copy to prevent external modification
+	result := make([]string, len(n.Values[idx]))
+	copy(result, n.Values[idx])
+	return result
+}
+
+// GetAllKeys returns all keys in the node
+func (n *Node) GetAllKeys() []string {
+	result := make([]string, len(n.Keys))
+	copy(result, n.Keys)
+	return result
+}
+
+// KeyCount returns the number of keys in the node
+func (n *Node) KeyCount() int {
+	return len(n.Keys)
+}
+
+// IsEmpty returns true if the node has no keys
+func (n *Node) IsEmpty() bool {
+	return len(n.Keys) == 0
+}
+
+// IsFull returns true if the node has reached the maximum number of keys
+func (n *Node) IsFull(maxKeys int) bool {
+	return len(n.Keys) >= maxKeys
+}
+
+// Leaf node operations
+
+// InsertKeyValue inserts a key-value pair (leaf nodes only)
+func (n *Node) InsertKeyValue(key, value string) error {
+	if !n.IsLeaf {
+		return ErrNotALeafNode
+	}
+
+	idx, keyExists := n.findKeyIndex(key)
+
+	if keyExists {
+		// Key exists, append value if not already present
+		if !slices.Contains(n.Values[idx], value) {
+			n.Values[idx] = append(n.Values[idx], value)
+		}
+	} else {
+		// Key doesn't exist, insert both key and value
+		n.Keys = slices.Insert(n.Keys, idx, key)
+		n.Values = slices.Insert(n.Values, idx, []string{value})
+	}
+
+	return nil
+}
+
+// RemoveValueFromKey removes a specific value from a key (leaf nodes only)
+func (n *Node) RemoveValueFromKey(key, value string) (RemovalResult, error) {
+	if !n.IsLeaf {
+		return Nil, ErrNotALeafNode
+	}
+
+	idx, found := n.findKeyIndex(key)
+	if !found {
+		return KeyNotFound, nil
+	}
+
+	values := n.Values[idx]
+	valueIdx := slices.Index(values, value)
+	if valueIdx == -1 {
+		return ValueNotFound, nil
+	}
+
+	// Remove the value
+	n.Values[idx] = slices.Delete(values, valueIdx, valueIdx+1)
+
+	// If no values left, remove the key entirely
+	if len(n.Values[idx]) == 0 {
+		n.Keys = slices.Delete(n.Keys, idx, idx+1)
+		n.Values = slices.Delete(n.Values, idx, idx+1)
+		return KeyRemoved, nil
+	}
+
+	return ValueRemoved, nil
+}
+
+// RemoveKey removes an entire key and all its values (leaf nodes only)
+func (n *Node) RemoveKey(key string) (RemovalResult, error) {
+	if !n.IsLeaf {
+		return Nil, ErrNotALeafNode
+	}
+
+	idx, found := n.findKeyIndex(key)
+	if !found {
+		return KeyNotFound, nil
+	}
+
+	n.Keys = slices.Delete(n.Keys, idx, idx+1)
+	n.Values = slices.Delete(n.Values, idx, idx+1)
+	return KeyRemoved, nil
+}
+
+// Internal node operations
+
+// InsertKeyChild inserts a key and child at the appropriate position (internal nodes only)
+func (n *Node) InsertKeyChild(key, childID string) error {
+	if n.IsLeaf {
+		return ErrNotAnInternalNode
+	}
+
+	idx, _ := n.findKeyIndex(key)
+	n.Keys = slices.Insert(n.Keys, idx, key)
+	n.ChildrenIDs = slices.Insert(n.ChildrenIDs, idx+1, childID)
+	return nil
+}
+
+// RemoveKeyChildAt removes a key and its associated child at the specified index (internal nodes only)
+func (n *Node) RemoveKeyChildAt(idx int) error {
+	if n.IsLeaf {
+		return ErrNotAnInternalNode
+	}
+
+	if idx < 0 || idx >= len(n.Keys) {
+		return ErrKeyIndexOutOfBounds
+	}
+
+	n.Keys = slices.Delete(n.Keys, idx, idx+1)
+	// Remove the child to the right of the key
+	if idx+1 < len(n.ChildrenIDs) {
+		n.ChildrenIDs = slices.Delete(n.ChildrenIDs, idx+1, idx+2)
+	}
+	return nil
+}
+
+// GetChildAt returns the child ID at the specified index (internal nodes only)
+func (n *Node) GetChildAt(idx int) (string, error) {
+	if n.IsLeaf {
+		return "", ErrNotAnInternalNode
+	}
+
+	if idx < 0 || idx >= len(n.ChildrenIDs) {
+		return "", ErrChildIndexOutOfBounds
+	}
+
+	return n.ChildrenIDs[idx], nil
+}
+
+// GetKeyAt returns the key at the specified index
+func (n *Node) GetKeyAt(idx int) (string, error) {
+	if idx < 0 || idx >= len(n.Keys) {
+		return "", ErrKeyIndexOutOfBounds
+	}
+
+	return n.Keys[idx], nil
+}
+
+// GetChildForKey returns the child ID that should contain the given key (internal nodes only)
+func (n *Node) GetChildForKey(key string) (string, error) {
+	if n.IsLeaf {
+		return "", ErrNotAnInternalNode
+	}
+
+	idx, found := n.findKeyIndex(key)
+	if found {
+		// Key found, return the child to its right
+		if idx+1 < len(n.ChildrenIDs) {
+			return n.ChildrenIDs[idx+1], nil
+		}
+	}
+
+	// Key not found or no right child, return the child to the left
+	if idx < len(n.ChildrenIDs) {
+		return n.ChildrenIDs[idx], nil
+	}
+
+	return "", ErrChildIndexOutOfBounds
+}
+
+// Low-level operations (for B+ tree internals)
+
 // findKeyIndex finds the index where a key should be inserted or is located
 // Returns the index and whether the key was found
 func (n *Node) findKeyIndex(key string) (int, bool) {
@@ -64,172 +275,26 @@ func (n *Node) findKeyIndex(key string) (int, bool) {
 			return i, false
 		}
 	}
-
-	// NOTE (gabrielopesantos): Review returning the length of Keys if not found
 	return len(n.Keys), false
 }
 
-// insertKeyAt inserts a key at the specified index
-func (n *Node) insertKeyAt(idx int, key string) error {
-	if idx < 0 || idx > len(n.Keys) {
-		return ErrKeyIndexOutOfBounds
-	}
-
-	// log.Printf("Inserting key %s at index %d in node %s", key, idx, n.ID)
-	// Insert new key
-	n.Keys = slices.Insert(n.Keys, idx, key)
-	return nil
-}
-
-// appendIfNotExists appends a value to a slice if it does not already exist
-func appendIfNotExists(slice []string, value string) []string {
-	if !slices.Contains(slice, value) {
-		return append(slice, value)
-	}
-
-	return slice
-}
-
-// insertValueAt inserts a value at the specified index
-// If the key already exists, it appends the value to the existing slice
-// NOTE (gabrielopesantos): I don't like the fact that `keyExists` is passed in
-// couldn't couldn't make it work otherwise (REVIEW)
-func (n *Node) insertValueAt(idx int, keyExists bool, value string) error {
-	// Sanity check: ensure index is within bounds
-	if idx < 0 || idx > len(n.Values) {
-		return ErrValueIndexOutOfBounds
-	}
-
-	// If we are inserting the value for an existing key, it is possible
-	// that is duplicated so we don't want to insert it again
-	if keyExists {
-		n.Values[idx] = appendIfNotExists(n.Values[idx], value)
-	} else {
-		// Insert new value slice
-		n.Values = slices.Insert(n.Values, idx, []string{value})
-	}
-
-	return nil
-}
-
-// insertChildAt inserts a child node ID at the specified index
-func (n *Node) insertChildAt(idx int, childID string) error {
-	// Sanity check: ensure index is within bounds
-	// log.Printf("Idx is %d, ChildrenIDs length is %d", idx, len(n.ChildrenIDs))
-	if idx < 0 || idx > len(n.ChildrenIDs) {
-		// NOTE (gabrielopesantos): Review...
-		idx = len(n.ChildrenIDs) // If out of bounds, append to the end
-	}
-
-	// log.Printf("Inserting childID %s at index %d in node %s", childID, idx, n.ID)
-	// Insert new childID
-	n.ChildrenIDs = slices.Insert(n.ChildrenIDs, idx, childID)
-	return nil
-}
-
-// insertKeyValueAt inserts a key-value pair at the specified index (for leaf nodes only)
-func (n *Node) insertKeyValueAt(key string, value string) error {
-	// Sanity check: ensure this is a leaf node
-	if !n.IsLeaf {
-		return ErrNotALeafNode
-	}
-
-	// Fetch the index where the key should be inserted
-	insertIdx, keyExists := n.findKeyIndex(key)
-	if !keyExists {
-		// Insert the key if it doesn't exist
-		n.insertKeyAt(insertIdx, key)
-	}
-
-	// Insert the value at the same index
-	n.insertValueAt(insertIdx, keyExists, value)
-	return nil
-}
-
-// insertKeyChildAt inserts a key and a child node ID at the specified index
-func (n *Node) insertKeyChildAt(idx int, key string, childID string) error {
-	if n.IsLeaf {
-		return ErrNotAnInternalNode
-	}
-
-	// Insert new key
-	err := n.insertKeyAt(idx, key)
-	if err != nil {
-		return err
-	}
-
-	// Insert new childID
-	return n.insertChildAt(idx+1, childID)
-}
-
-func (n *Node) removeKeyAt(idx int) error {
+// RemoveKeyAt removes a key at the specified index (low-level operation)
+func (n *Node) RemoveKeyAt(idx int) error {
 	if idx < 0 || idx >= len(n.Keys) {
 		return ErrKeyIndexOutOfBounds
 	}
-
-	// Remove the key at the specified index
 	n.Keys = slices.Delete(n.Keys, idx, idx+1)
 	return nil
 }
 
-func (n *Node) removeValueAt(idx int) error {
+// RemoveValueAt removes values at the specified index (low-level operation, leaf nodes only)
+func (n *Node) RemoveValueAt(idx int) error {
+	if !n.IsLeaf {
+		return ErrNotALeafNode
+	}
 	if idx < 0 || idx >= len(n.Values) {
 		return ErrValueIndexOutOfBounds
 	}
-
-	// Remove the value at the specified index
 	n.Values = slices.Delete(n.Values, idx, idx+1)
 	return nil
-}
-
-// removeKeyEntryAt removes a key-value pair at the specified index
-// This methods is currently specific to leaf nodes
-func (n *Node) removeKeyEntryAt(idx int) error {
-	if !n.IsLeaf {
-		return ErrNotALeafNode
-	}
-
-	err := n.removeKeyAt(idx)
-	if err != nil {
-		return err
-	}
-
-	err = n.removeValueAt(idx)
-	if err != nil {
-		return err
-	}
-
-	// if len(n.Keys) == 0 {
-	// 	n.Values = nil // Clear values if no keys left
-	// }
-
-	return nil
-}
-
-// removeKeyValueAt removes a key and the associated value at the specified index
-func (n *Node) removeKeyValueAt(idx int, value string) error {
-	if !n.IsLeaf {
-		return ErrNotALeafNode
-	}
-
-	values := n.Values[idx]
-	if slices.Contains(values, value) {
-		// Remove the value from the slice
-		values = slices.Delete(values, slices.Index(values, value), slices.Index(values, value)+1)
-		if len(values) == 0 {
-			// If no values left, remove the key
-			n.removeKeyEntryAt(idx)
-		} else {
-			// Otherwise, update the values
-			n.Values[idx] = values
-		}
-	}
-
-	return nil
-}
-
-// TODO (gabrielopesantos): Remove if it is not being used;
-// removeChild removes a child at the specified index
-func (n *Node) removeChild(idx int) {
-	n.ChildrenIDs = slices.Delete(n.ChildrenIDs, idx, idx+1)
 }

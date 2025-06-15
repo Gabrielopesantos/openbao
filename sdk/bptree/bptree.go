@@ -349,7 +349,7 @@ func (t *BPlusTree) Insert(ctx context.Context, storage Storage, key string, val
 		return err
 	}
 
-	_ = leaf.insertKeyValueAt(key, value)
+	_ = leaf.InsertKeyValue(key, value)
 
 	// If the leaf has overflow, we need to split it
 	if t.nodeOverflows(leaf) {
@@ -394,9 +394,13 @@ func (t *BPlusTree) Delete(ctx context.Context, storage Storage, key string) (bo
 	}
 
 	// Delete the key-value pair
-	err = leaf.removeKeyEntryAt(idx)
+	err = leaf.RemoveKeyAt(idx)
 	if err != nil {
-		return entryDeleted, fmt.Errorf("failed to remove key entry: %w", err)
+		return entryDeleted, fmt.Errorf("failed to remove key: %w", err)
+	}
+	err = leaf.RemoveValueAt(idx)
+	if err != nil {
+		return entryDeleted, fmt.Errorf("failed to remove value: %w", err)
 	}
 
 	// Save the leaf node after deletion
@@ -432,14 +436,13 @@ func (t *BPlusTree) DeleteValue(ctx context.Context, storage Storage, key string
 	}
 
 	// Check if the key exists in the leaf node
-	idx, found := leaf.findKeyIndex(key)
-	if !found {
+	if !leaf.HasKey(key) {
 		return valueDeleted, nil
 	}
 
-	err = leaf.removeKeyValueAt(idx, value)
-	if err != nil {
-		return valueDeleted, fmt.Errorf("failed to remove value for key '%s': %w", key, err)
+	result, _ := leaf.RemoveValueFromKey(key, value)
+	if result == KeyNotFound {
+		return valueDeleted, nil
 	}
 
 	// Save the leaf node after deletion
@@ -567,11 +570,11 @@ func (t *BPlusTree) insertIntoParent(ctx context.Context, storage Storage, leftN
 		return err
 	}
 
-	// Find position in parent to insert the new key and child
-	insertPos, _ := parent.findKeyIndex(splitKey)
-
 	// Insert the split key and right node into the parent
-	parent.insertKeyChildAt(insertPos, splitKey, rightNode.ID)
+	err = parent.InsertKeyChild(splitKey, rightNode.ID)
+	if err != nil {
+		return fmt.Errorf("failed to insert key-child into parent: %w", err)
+	}
 
 	rightNode.ParentID = parent.ID
 
@@ -727,7 +730,14 @@ func (t *BPlusTree) borrowFromLeafSibling(ctx context.Context, storage Storage, 
 		borrowedValue := sibling.Values[len(sibling.Values)-1]
 
 		// Remove from sibling
-		sibling.removeKeyEntryAt(len(sibling.Keys) - 1)
+		err := sibling.RemoveKeyAt(len(sibling.Keys) - 1)
+		if err != nil {
+			return fmt.Errorf("failed to remove key from sibling: %w", err)
+		}
+		err = sibling.RemoveValueAt(len(sibling.Values) - 1)
+		if err != nil {
+			return fmt.Errorf("failed to remove value from sibling: %w", err)
+		}
 
 		// Insert at beginning of node
 		node.Keys = slices.Insert(node.Keys, 0, borrowedKey)
@@ -741,7 +751,14 @@ func (t *BPlusTree) borrowFromLeafSibling(ctx context.Context, storage Storage, 
 		borrowedValue := sibling.Values[0]
 
 		// Remove from sibling
-		sibling.removeKeyEntryAt(0)
+		err := sibling.RemoveKeyAt(0)
+		if err != nil {
+			return fmt.Errorf("failed to remove key from sibling: %w", err)
+		}
+		err = sibling.RemoveValueAt(0)
+		if err != nil {
+			return fmt.Errorf("failed to remove value from sibling: %w", err)
+		}
 
 		// Insert at end of node
 		node.Keys = append(node.Keys, borrowedKey)

@@ -26,445 +26,402 @@ func TestNewInternalNode(t *testing.T) {
 	require.Empty(t, node.ChildrenIDs)
 }
 
-func TestFindKeyIndex(t *testing.T) {
-	t.Run("EmptyNode", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		idx, found := node.findKeyIndex("key5")
-		require.False(t, found)
-		require.Equal(t, 0, idx)
-	})
+func TestHasKey(t *testing.T) {
+	node := NewLeafNode("leaf")
 
-	t.Run("KeyFound", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
-		node.insertKeyValueAt("key7", "seven")
-		node.insertKeyValueAt("key9", "nine")
+	// Empty node
+	require.False(t, node.HasKey("key1"))
 
-		// Test finding an existing key
-		tests := []struct {
-			key           string
-			expectedIndex int
-		}{
-			{"key1", 0}, // First key
-			{"key3", 1}, // Second key
-			{"key5", 2}, // Third key
-			{"key7", 3}, // Fourth key
-			{"key9", 4}, // Fifth key
-		}
-		for _, test := range tests {
-			idx, found := node.findKeyIndex(test.key)
-			require.True(t, found)
-			require.Equal(t, test.expectedIndex, idx)
-		}
-	})
+	// Add some keys
+	node.InsertKeyValue("key1", "value1")
+	node.InsertKeyValue("key3", "value3")
 
-	t.Run("KeyNotFound", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
-		node.insertKeyValueAt("key7", "seven")
-		node.insertKeyValueAt("key9", "nine")
+	// Test existing keys
+	require.True(t, node.HasKey("key1"))
+	require.True(t, node.HasKey("key3"))
 
-		// Test insertion point for various values
-		tests := []struct {
-			key           string
-			expectedIndex int
-		}{
-			{"key0", 0}, // Before all keys
-			{"key2", 1}, // Between key1 and key3
-			{"key4", 2}, // Between key3 and key5
-			{"key6", 3}, // Between key5 and key7
-			{"key8", 4}, // Between key7 and key9
-			{"keyZ", 5}, // After all keys
-		}
+	// Test non-existing key
+	require.False(t, node.HasKey("key2"))
+}
 
-		for _, test := range tests {
-			idx, found := node.findKeyIndex(test.key)
-			require.False(t, found)
-			require.Equal(t, test.expectedIndex, idx)
-		}
-	})
+func TestGetValues(t *testing.T) {
+	node := NewLeafNode("leaf")
+
+	// Test non-existing key
+	values := node.GetValues("key1")
+	require.Empty(t, values)
+
+	// Add values
+	node.InsertKeyValue("key1", "value1")
+	node.InsertKeyValue("key1", "value2")
+	node.InsertKeyValue("key2", "value3")
+
+	// Test existing key with multiple values
+	values = node.GetValues("key1")
+	require.Equal(t, []string{"value1", "value2"}, values)
+
+	// Test existing key with single value
+	values = node.GetValues("key2")
+	require.Equal(t, []string{"value3"}, values)
+
+	// Test non-existing key
+	values = node.GetValues("key3")
+	require.Empty(t, values)
+}
+
+func TestGetAllKeys(t *testing.T) {
+	node := NewLeafNode("leaf")
+
+	// Empty node
+	keys := node.GetAllKeys()
+	require.Empty(t, keys)
+
+	// Add keys
+	node.InsertKeyValue("key3", "value3")
+	node.InsertKeyValue("key1", "value1")
+	node.InsertKeyValue("key2", "value2")
+
+	// Keys should be sorted
+	keys = node.GetAllKeys()
+	require.Equal(t, []string{"key1", "key2", "key3"}, keys)
+}
+
+func TestKeyCount(t *testing.T) {
+	node := NewLeafNode("leaf")
+
+	// Empty node
+	require.Equal(t, 0, node.KeyCount())
+
+	// Add keys
+	node.InsertKeyValue("key1", "value1")
+	require.Equal(t, 1, node.KeyCount())
+
+	node.InsertKeyValue("key2", "value2")
+	require.Equal(t, 2, node.KeyCount())
+
+	// Add duplicate key (should not increase count)
+	node.InsertKeyValue("key1", "value1b")
+	require.Equal(t, 2, node.KeyCount())
+}
+
+func TestIsEmpty(t *testing.T) {
+	node := NewLeafNode("leaf")
+
+	// Empty node
+	require.True(t, node.IsEmpty())
+
+	// Add key
+	node.InsertKeyValue("key1", "value1")
+	require.False(t, node.IsEmpty())
+
+	// Remove key
+	node.RemoveKey("key1")
+	require.True(t, node.IsEmpty())
+}
+
+func TestIsFull(t *testing.T) {
+	node := NewLeafNode("leaf")
+	maxKeys := 3 // Set max for testing
+
+	// Empty node
+	require.False(t, node.IsFull(maxKeys))
+
+	// Add keys up to limit
+	node.InsertKeyValue("key1", "value1")
+	require.False(t, node.IsFull(maxKeys))
+
+	node.InsertKeyValue("key2", "value2")
+	require.False(t, node.IsFull(maxKeys))
+
+	node.InsertKeyValue("key3", "value3")
+	require.True(t, node.IsFull(maxKeys))
 }
 
 func TestInsertKeyValue(t *testing.T) {
-	t.Run("EmptyNode", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key5", "five")
+	node := NewLeafNode("leaf")
 
-		require.Equal(t, []string{"key5"}, node.Keys)
-		require.Equal(t, [][]string{{"five"}}, node.Values)
-	})
+	// Test basic insertion
+	err := node.InsertKeyValue("key2", "value2")
+	require.NoError(t, err)
+	require.Equal(t, []string{"key2"}, node.Keys)
+	require.Equal(t, [][]string{{"value2"}}, node.Values)
 
-	t.Run("AppendToEnd", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
+	// Test insertion at beginning
+	err = node.InsertKeyValue("key1", "value1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"key1", "key2"}, node.Keys)
+	require.Equal(t, [][]string{{"value1"}, {"value2"}}, node.Values)
 
-		node.insertKeyValueAt("key5", "five")
+	// Test insertion at end
+	err = node.InsertKeyValue("key3", "value3")
+	require.NoError(t, err)
+	require.Equal(t, []string{"key1", "key2", "key3"}, node.Keys)
+	require.Equal(t, [][]string{{"value1"}, {"value2"}, {"value3"}}, node.Values)
 
-		require.Equal(t, []string{"key1", "key3", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"three"}, {"five"}}, node.Values)
-	})
-
-	t.Run("InsertInMiddle", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key5", "five")
-
-		node.insertKeyValueAt("key3", "three")
-
-		require.Equal(t, []string{"key1", "key3", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"three"}, {"five"}}, node.Values)
-	})
-
-	t.Run("InsertAtBeginning", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
-
-		node.insertKeyValueAt("key1", "one")
-
-		require.Equal(t, []string{"key1", "key3", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"three"}, {"five"}}, node.Values)
-	})
-
-	t.Run("OutOfBoundsIndex", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-
-		// Index beyond bounds should append to the end
-		node.insertKeyValueAt("key5", "five")
-
-		require.Equal(t, []string{"key1", "key3", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"three"}, {"five"}}, node.Values)
-	})
-
-	t.Run("InsertExistingKey", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("color", "red")
-		node.insertKeyValueAt("size", "small")
-		node.insertKeyValueAt("color", "blue")
-		node.insertKeyValueAt("color", "blue")
-		node.insertKeyValueAt("size", "large")
-
-		require.Equal(t, []string{"color", "size"}, node.Keys)
-		require.Equal(t, [][]string{{"red", "blue"}, {"small", "large"}}, node.Values)
-	})
-
-	t.Run("InsertMultipleValuesForSameKey", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("color", "red")
-		node.insertKeyValueAt("color", "blue")
-		node.insertKeyValueAt("color", "green")
-
-		require.Equal(t, []string{"color"}, node.Keys)
-		require.Equal(t, [][]string{{"red", "blue", "green"}}, node.Values)
-	})
-
-	t.Run("InsertMultipleKeysAndValues", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("color", "red")
-		node.insertKeyValueAt("size", "small")
-		node.insertKeyValueAt("color", "blue")
-		node.insertKeyValueAt("size", "large")
-		node.insertKeyValueAt("shape", "circle")
-		node.insertKeyValueAt("shape", "square")
-		node.insertKeyValueAt("color", "yellow")
-		node.insertKeyValueAt("size", "medium")
-		node.insertKeyValueAt("shape", "triangle")
-		require.Equal(t, []string{"color", "shape", "size"}, node.Keys)
-		require.Equal(t, [][]string{
-			{"red", "blue", "yellow"},
-			{"circle", "square", "triangle"},
-			{"small", "large", "medium"},
-		}, node.Values)
-	})
-
-	t.Run("InsertKeyValueOnInternalNode", func(t *testing.T) {
-		node := NewInternalNode("internal")
-		err := node.insertKeyValueAt("key1", "value1")
-		require.Error(t, err, "Expected error when inserting key-value on internal node")
-		require.Equal(t, ErrNotALeafNode, err)
-	})
+	// Test duplicate key (should add to existing values)
+	err = node.InsertKeyValue("key2", "value2b")
+	require.NoError(t, err)
+	require.Equal(t, []string{"key1", "key2", "key3"}, node.Keys)
+	require.Equal(t, [][]string{{"value1"}, {"value2", "value2b"}, {"value3"}}, node.Values)
 }
 
-// NOTE (gabrielopesantos): This methods needs to be reviewed.
+func TestInsertKeyValueOnInternalNode(t *testing.T) {
+	node := NewInternalNode("internal")
+
+	// Should fail on internal node
+	err := node.InsertKeyValue("key1", "value1")
+	require.Error(t, err)
+	require.Equal(t, err, ErrNotALeafNode)
+}
+
+func TestRemoveValueFromKey(t *testing.T) {
+	node := NewLeafNode("leaf")
+
+	// Setup test data
+	node.InsertKeyValue("key1", "value1")
+	node.InsertKeyValue("key1", "value2")
+	node.InsertKeyValue("key2", "value3")
+
+	// Remove specific value
+	result, err := node.RemoveValueFromKey("key1", "value2")
+	require.NoError(t, err)
+	require.Equal(t, ValueRemoved, result)
+	require.Equal(t, []string{"value1"}, node.GetValues("key1"))
+
+	// Remove non-existing value
+	result, err = node.RemoveValueFromKey("key1", "nonexistent")
+	require.NoError(t, err)
+	require.Equal(t, ValueNotFound, result)
+
+	// Remove last value (should remove key)
+	result, err = node.RemoveValueFromKey("key1", "value1")
+	require.NoError(t, err)
+	require.Equal(t, KeyRemoved, result)
+	require.False(t, node.HasKey("key1"))
+
+	// Remove from non-existing key
+	result, err = node.RemoveValueFromKey("nonexistent", "value")
+	require.NoError(t, err)
+	require.Equal(t, KeyNotFound, result)
+}
+
+func TestRemoveKey(t *testing.T) {
+	node := NewLeafNode("leaf")
+
+	// Setup test data
+	node.InsertKeyValue("key1", "value1")
+	node.InsertKeyValue("key1", "value2")
+	node.InsertKeyValue("key2", "value3")
+
+	// Remove existing key
+	result, err := node.RemoveKey("key1")
+	require.NoError(t, err)
+	require.Equal(t, KeyRemoved, result)
+	require.False(t, node.HasKey("key1"))
+	require.Equal(t, []string{"key2"}, node.Keys)
+
+	// Remove non-existing key
+	result, err = node.RemoveKey("nonexistent")
+	require.NoError(t, err)
+	require.Equal(t, KeyNotFound, result)
+}
+
 func TestInsertKeyChild(t *testing.T) {
-	t.Run("InsertKeyChildInEmptyNode", func(t *testing.T) {
-		node := NewInternalNode("internal")
-		err := node.insertKeyChildAt(0, "key1", "child1")
-		require.NoError(t, err)
-		require.Equal(t, []string{"key1"}, node.Keys)
-		require.Equal(t, []string{"child1"}, node.ChildrenIDs)
-	})
+	node := NewInternalNode("internal")
 
-	// NOTE (gabrielopesantos): This method is built for inserting a key and the child to the right of the index,
-	// so it fails. Needs to be reviewed.
-	// t.Run("InsertKeyChildAtBeginning", func(t *testing.T) {
-	// 	node := NewInternalNode("internal")
-	// 	node.insertKeyChildAt(0, "key2", "child2")
-	// 	node.insertKeyChildAt(0, "key1", "child1") // Insert at beginning
+	node.ChildrenIDs = []string{"child0"} // Pre-populate with left-most child
 
-	// 	require.Equal(t, []string{"key1", "key2"}, node.Keys)
-	// 	require.Equal(t, []string{"child1", "child2"}, node.ChildrenIDs)
-	// })
+	// Test basic insertion
+	err := node.InsertKeyChild("key2", "child2")
+	require.NoError(t, err)
+	require.Equal(t, []string{"key2"}, node.Keys)
+	require.Equal(t, []string{"child0", "child2"}, node.ChildrenIDs)
 
-	t.Run("InsertKeyChildAtEnd", func(t *testing.T) {
-		node := NewInternalNode("internal")
-		node.insertKeyChildAt(0, "key1", "child1")
-		node.insertKeyChildAt(1, "key3", "child3") // Insert at end
+	// Test insertion at beginning
+	err = node.InsertKeyChild("key1", "child1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"key1", "key2"}, node.Keys)
+	require.Equal(t, []string{"child0", "child1", "child2"}, node.ChildrenIDs)
 
-		require.Equal(t, []string{"key1", "key3"}, node.Keys)
-		require.Equal(t, []string{"child1", "child3"}, node.ChildrenIDs)
-	})
-
-	// NOTE (gabrielopesantos): Also needs to be reviewed.
-	// t.Run("InsertKeyChildInMiddle", func(t *testing.T) {
-	// 	node := NewInternalNode("internal")
-	// 	node.insertKeyChildAt(0, "key1", "child1")
-	// 	node.insertKeyChildAt(1, "key3", "child3")
-	// 	node.insertKeyChildAt(1, "key2", "child2") // Insert in middle
-
-	// 	require.Equal(t, []string{"key1", "key2", "key3"}, node.Keys)
-	// 	require.Equal(t, []string{"child1", "child2", "child3"}, node.ChildrenIDs)
-	// })
-
-	// t.Run("InsertKeyChildOutOfBounds", func(t *testing.T) {
-	// 	node := NewInternalNode("internal")
-	// 	node.insertKeyChildAt(0, "key1", "child1")
-
-	// 	// Attempt to insert at an out-of-bounds index
-	// 	err := node.insertKeyChildAt(5, "key2", "child2")
-	// 	require.NoError(t, err) // Should append to the end
-	// 	require.Equal(t, []string{"key1", "key2"}, node.Keys)
-	// 	require.Equal(t, []string{"child1", "child2"}, node.ChildrenIDs)
-	// })
-
-	t.Run("InsertKeyChildOnLeafNode", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		err := node.insertKeyChildAt(0, "key1", "child1")
-		require.Error(t, err, "Expected error when inserting key-child on leaf node")
-		require.Equal(t, ErrNotAnInternalNode, err)
-	})
+	// Test insertion at end
+	err = node.InsertKeyChild("key3", "child3")
+	require.NoError(t, err)
+	require.Equal(t, []string{"key1", "key2", "key3"}, node.Keys)
+	require.Equal(t, []string{"child0", "child1", "child2", "child3"}, node.ChildrenIDs)
 }
 
-func TestRemoveKeyValue(t *testing.T) {
-	t.Run("RemoveFromMiddle", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
+func TestInsertKeyChildOnLeafNode(t *testing.T) {
+	node := NewLeafNode("leaf")
 
-		node.removeKeyEntryAt(1) // Remove key3
-
-		require.Equal(t, []string{"key1", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"five"}}, node.Values)
-	})
-
-	t.Run("RemoveFromBeginning", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
-
-		node.removeKeyEntryAt(0) // Remove key1
-
-		require.Equal(t, []string{"key3", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"three"}, {"five"}}, node.Values)
-	})
-
-	t.Run("RemoveFromEnd", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
-
-		node.removeKeyEntryAt(2) // Remove key5
-
-		require.Equal(t, []string{"key1", "key3"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"three"}}, node.Values)
-	})
-
-	t.Run("RemoveOnlyElement", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-
-		node.removeKeyEntryAt(0)
-
-		require.Empty(t, node.Keys)
-		require.Empty(t, node.Values)
-	})
-
-	t.Run("RemoveNonExistentKey", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-
-		// Attempt to remove a key that doesn't exist
-		err := node.removeKeyEntryAt(5) // Out of bounds index
-		require.Error(t, err, "Expected error when removing non-existent key")
-		require.Equal(t, ErrKeyIndexOutOfBounds, err)
-	})
+	// Should fail on leaf node
+	err := node.InsertKeyChild("key1", "child1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "leaf node")
 }
 
-func TestRemoveKeyEntryAt(t *testing.T) {
-	t.Run("RemoveKeyEntryFromInternalNode", func(t *testing.T) {
-		node := NewInternalNode("internal")
-		err := node.removeKeyEntryAt(0) // Attempt to remove key1
-		require.Error(t, err, "Expected error when inserting key-child on internal node")
-		require.Equal(t, ErrNotALeafNode, err)
-	})
+func TestRemoveKeyChildAt(t *testing.T) {
+	node := NewInternalNode("internal")
 
-	t.Run("RemoveKeyEntryFromLeafNode", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
+	// Pre-populate with left-most child
+	node.ChildrenIDs = []string{"child0"}
 
-		err := node.removeKeyEntryAt(1) // Remove key3
-		require.NoError(t, err)
+	// Setup test data
+	node.InsertKeyChild("key1", "child1")
+	node.InsertKeyChild("key2", "child2")
+	node.InsertKeyChild("key3", "child3")
 
-		require.Equal(t, []string{"key1", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"five"}}, node.Values)
-	})
+	// Remove middle entry
+	err := node.RemoveKeyChildAt(1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"key1", "key3"}, node.Keys)
+	require.Equal(t, []string{"child0", "child1", "child3"}, node.ChildrenIDs)
 
-	t.Run("RemoveKeyEntryFromBeginning", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
-		err := node.removeKeyEntryAt(0) // Remove key1
-		require.NoError(t, err)
-		require.Equal(t, []string{"key3", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"three"}, {"five"}}, node.Values)
-	})
-	t.Run("RemoveKeyEntryFromEnd", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
-		err := node.removeKeyEntryAt(2) // Remove key5
-		require.NoError(t, err)
-		require.Equal(t, []string{"key1", "key3"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"three"}}, node.Values)
-	})
+	// Remove first entry
+	err = node.RemoveKeyChildAt(0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"key3"}, node.Keys)
+	require.Equal(t, []string{"child0", "child3"}, node.ChildrenIDs)
 
-	t.Run("RemoveKeyEntryFromOnlyElement", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		err := node.removeKeyEntryAt(0) // Remove key1
-		require.NoError(t, err)
-		require.Empty(t, node.Keys)
-		require.Empty(t, node.Values)
-	})
+	// Remove last entry
+	err = node.RemoveKeyChildAt(0)
+	require.NoError(t, err)
+	require.Empty(t, node.Keys)
+	require.Equal(t, []string{"child0"}, node.ChildrenIDs)
 
-	t.Run("RemoveKeyEntryFromEmptyNode", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-
-		err := node.removeKeyEntryAt(0) // Attempt to remove from empty node
-		require.Error(t, err, "Expected error when removing key from empty node")
-		require.Equal(t, ErrKeyIndexOutOfBounds, err)
-	})
+	// Remove from empty node
+	err = node.RemoveKeyChildAt(0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "index out of bounds")
 }
 
-func TestRemoveKeyValueAt(t *testing.T) {
-	t.Run("RemoveKeyValueAtFromInternalNode", func(t *testing.T) {
-		node := NewInternalNode("internal")
-		err := node.removeKeyValueAt(0, "value") // Attempt to remove key1
-		require.Error(t, err, "Expected error when removing key-value from internal node")
-		require.Equal(t, ErrNotALeafNode, err)
-	})
+func TestGetChildAt(t *testing.T) {
+	node := NewInternalNode("internal")
 
-	t.Run("RemoveKeyValueAtFromLeafNode", func(t *testing.T) {
-		node := NewLeafNode("leaf")
-		node.insertKeyValueAt("key1", "one")
-		node.insertKeyValueAt("key1", "oneone")
-		node.insertKeyValueAt("key1", "oneoneone")
-		node.insertKeyValueAt("key3", "three")
-		node.insertKeyValueAt("key5", "five")
+	// Pre-populate with left-most child
+	node.ChildrenIDs = []string{"child0"}
 
-		// Remove key1 with value "oneone"
-		err := node.removeKeyValueAt(0, "oneone") // Remove key1
-		require.NoError(t, err)
+	// Setup test data
+	node.InsertKeyChild("key1", "child1")
+	node.InsertKeyChild("key2", "child2")
 
-		require.Equal(t, []string{"key1", "key3", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"one", "oneoneone"}, {"three"}, {"five"}}, node.Values)
+	// Test valid indices
+	childID, err := node.GetChildAt(0)
+	require.NoError(t, err)
+	require.Equal(t, "child0", childID)
 
-		// Remove non-existent value from key1
-		err = node.removeKeyValueAt(0, "nonexistent")
-		require.NoError(t, err, "Expected no error when removing non-existent value")
+	childID, err = node.GetChildAt(1)
+	require.NoError(t, err)
+	require.Equal(t, "child1", childID)
 
-		// Remove last value from key1
-		err = node.removeKeyValueAt(0, "oneoneone")
-		require.NoError(t, err)
-		require.Equal(t, []string{"key1", "key3", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"three"}, {"five"}}, node.Values)
+	childID, err = node.GetChildAt(2)
+	require.NoError(t, err)
+	require.Equal(t, "child2", childID)
 
-		// Remove key2 with value "three"
-		err = node.removeKeyValueAt(1, "three")
-		require.NoError(t, err)
-		require.Equal(t, []string{"key1", "key5"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}, {"five"}}, node.Values)
-
-		// Remove key5 with value "five"
-		err = node.removeKeyValueAt(1, "five")
-		require.NoError(t, err)
-		require.Equal(t, []string{"key1"}, node.Keys)
-		require.Equal(t, [][]string{{"one"}}, node.Values)
-
-		// Remove last key-value pair
-		err = node.removeKeyValueAt(0, "one")
-		require.NoError(t, err)
-		require.Empty(t, node.Keys)
-		require.Empty(t, node.Values)
-
-		// Remove from empty node
-		// err = node.removeKeyValueAt(0, "anyvalue")
-		// require.Error(t, err, "Expected error when removing key-value from empty node")
-		// require.Equal(t, ErrKeyIndexOutOfBounds, err)
-	})
+	// Test invalid index
+	_, err = node.GetChildAt(3)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "index out of bounds")
 }
 
-func TestNodeInterfacingWithStorage(t *testing.T) {
-	ctx, storage, _ := initTest(t, nil)
+func TestGetKeyAt(t *testing.T) {
+	node := NewInternalNode("internal")
 
-	// Test SaveNode and LoadNode
-	leafID := "leaf-1"
-	leaf := NewLeafNode(leafID)
-	leaf.insertKeyValueAt("key1", "value1")
-	leaf.insertKeyValueAt("key2", "value2")
+	// Pre-populate with left-most child
+	node.ChildrenIDs = []string{"child0"}
 
-	// Create an internal node
-	internalID := "internal-1"
-	internal := NewInternalNode(internalID)
-	internal.insertChildAt(0, leaf.ID)
+	// Setup test data
+	node.InsertKeyChild("key1", "child1")
+	node.InsertKeyChild("key2", "child2")
 
-	// Save the leaf node (saved after being added to the internal node otherwise there is no reference to parent on it)
-	err := storage.SaveNode(ctx, leaf)
-	require.NoError(t, err, "failed to save node")
+	// Test valid indices
+	key, err := node.GetKeyAt(0)
+	require.NoError(t, err)
+	require.Equal(t, "key1", key)
 
-	// Load the node
-	loadedLeaf, err := storage.LoadNode(ctx, leafID)
-	require.NoError(t, err, "failed to load node")
-	require.NotNil(t, loadedLeaf, "loaded node is nil")
+	key, err = node.GetKeyAt(1)
+	require.NoError(t, err)
+	require.Equal(t, "key2", key)
 
-	require.Equal(t, leaf.ID, loadedLeaf.ID, "expected node ID %s, got %s", leaf.ID, loadedLeaf.ID)
-	require.Equal(t, leaf.Keys, loadedLeaf.Keys, "expected node keys %v, got %v", leaf.Keys, loadedLeaf.Keys)
-	require.Equal(t, leaf.Values, loadedLeaf.Values, "expected node values %v, got %v", leaf.Values, loadedLeaf.Values)
+	// Test invalid index
+	_, err = node.GetKeyAt(2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "index out of bounds")
+}
 
-	// Save the internal node
-	err = storage.SaveNode(ctx, internal)
-	require.NoError(t, err, "failed to save internal node")
+func TestGetChildForKey(t *testing.T) {
+	node := NewInternalNode("internal")
 
-	// Load the internal node and check that keys are set but references not
-	loadedInternal, err := storage.LoadNode(ctx, internalID)
-	require.NoError(t, err, "failed to load internal node")
-	require.NotNil(t, loadedInternal, "loaded internal node is nil")
+	// Pre-populate with left-most child
+	node.ChildrenIDs = []string{"child0"}
 
-	require.Equal(t, internal.ID, loadedInternal.ID, "expected node ID %s, got %s", internal.ID, loadedInternal.ID)
-	require.Equal(t, internal.ChildrenIDs, loadedInternal.ChildrenIDs, "expected node children keys %v, got %v", internal.ChildrenIDs, loadedInternal.ChildrenIDs)
+	// Setup test data - keys partition the key space
+	// child1 handles keys < "key2"
+	// child2 handles keys >= "key2" and < "key4"
+	// child3 handles keys >= "key4"
+	node.InsertKeyChild("key2", "child1")
+	node.InsertKeyChild("key4", "child2")
+
+	// Test key less than first key
+	childID, err := node.GetChildForKey("key1")
+	require.NoError(t, err)
+	require.Equal(t, "child0", childID)
+
+	// Test key equal to first key
+	childID, err = node.GetChildForKey("key2")
+	require.NoError(t, err)
+	require.Equal(t, "child1", childID)
+
+	// Test key between keys
+	childID, err = node.GetChildForKey("key3")
+	require.NoError(t, err)
+	require.Equal(t, "child1", childID)
+
+	// Test key equal to second key
+	childID, err = node.GetChildForKey("key4")
+	require.NoError(t, err)
+	require.Equal(t, "child2", childID)
+
+	// Test key greater than all keys
+	childID, err = node.GetChildForKey("key5")
+	require.NoError(t, err)
+	require.Equal(t, "child2", childID)
+}
+
+func TestFindKeyIndex(t *testing.T) {
+	node := NewLeafNode("leaf")
+
+	// Setup test data
+	node.InsertKeyValue("key1", "value1")
+	node.InsertKeyValue("key3", "value3")
+	node.InsertKeyValue("key5", "value5")
+
+	// Test existing keys
+	idx, found := node.findKeyIndex("key1")
+	require.True(t, found)
+	require.Equal(t, 0, idx)
+
+	idx, found = node.findKeyIndex("key3")
+	require.True(t, found)
+	require.Equal(t, 1, idx)
+
+	idx, found = node.findKeyIndex("key5")
+	require.True(t, found)
+	require.Equal(t, 2, idx)
+
+	// Test non-existing keys (should return insertion position)
+	idx, found = node.findKeyIndex("key0") // Before all keys
+	require.False(t, found)
+	require.Equal(t, 0, idx)
+
+	idx, found = node.findKeyIndex("key2") // Between key1 and key3
+	require.False(t, found)
+	require.Equal(t, 1, idx)
+
+	idx, found = node.findKeyIndex("key4") // Between key3 and key5
+	require.False(t, found)
+	require.Equal(t, 2, idx)
+
+	idx, found = node.findKeyIndex("key6") // After all keys
+	require.False(t, found)
+	require.Equal(t, 3, idx)
 }
