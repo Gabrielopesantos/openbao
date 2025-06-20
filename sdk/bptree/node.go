@@ -11,17 +11,18 @@ type RemovalResult int
 const (
 	// NilRemovalResult indicates no removal occurred
 	Nil RemovalResult = iota
-	// ValueNotFound indicates the value was not found for the key
-	ValueNotFound
-	// ValueRemoved indicates a value was removed but the key still exists
-	ValueRemoved
 	// KeyRemoved indicates the entire key was removed
 	KeyRemoved
 	// KeyNotFound indicates the key was not found
 	KeyNotFound
+	// ValueNotFound indicates the value was not found for the key
+	ValueNotFound
+	// ValueRemoved indicates a value was removed but the key still exists
+	ValueRemoved
 )
 
 var (
+	// TODO (gabrielopesantos): Consider having a single error for all indexes out of bounds
 	// ErrKeyIndexOutOfBounds is returned when an index for a key is out of bounds
 	ErrKeyIndexOutOfBounds = errors.New("key index out of bounds")
 
@@ -47,6 +48,8 @@ type Node struct {
 	ChildrenIDs []string   `json:"childrenIDs"` // Only for internal nodes
 	ParentID    string     `json:"parentID"`
 	NextID      string     `json:"nextID"` // ID of the next leaf node
+	// TODO (gabrielopesantos): Set
+	PreviousID string `json:"previousID"` // ID of the previous leaf node
 }
 
 // NewLeafNode creates a new leaf node
@@ -69,21 +72,33 @@ func NewInternalNode(id string) *Node {
 	}
 }
 
-// High-level query operations
+// FindKeyIndex finds the index where a key should be inserted or is located
+// Returns the index and whether the key was found
+func (n *Node) FindKeyIndex(key string) (int, bool) {
+	for i, k := range n.Keys {
+		if k == key {
+			return i, true
+		}
+		if key < k {
+			return i, false
+		}
+	}
+	return len(n.Keys), false
+}
 
 // HasKey returns true if the node contains the specified key
 func (n *Node) HasKey(key string) bool {
-	_, found := n.findKeyIndex(key)
+	_, found := n.FindKeyIndex(key)
 	return found
 }
 
-// GetValues returns all values associated with a key (leaf nodes only)
-func (n *Node) GetValues(key string) []string {
+// GetKeyValues returns all values associated with a key (leaf nodes only)
+func (n *Node) GetKeyValues(key string) []string {
 	if !n.IsLeaf {
 		return nil
 	}
 
-	idx, found := n.findKeyIndex(key)
+	idx, found := n.FindKeyIndex(key)
 	if !found {
 		return nil
 	}
@@ -116,7 +131,50 @@ func (n *Node) IsFull(maxKeys int) bool {
 	return len(n.Keys) >= maxKeys
 }
 
-// Leaf node operations
+// GetKeyAt returns the key at the specified index
+func (n *Node) GetKeyAt(idx int) (string, error) {
+	if idx < 0 || idx >= len(n.Keys) {
+		return "", ErrKeyIndexOutOfBounds
+	}
+
+	return n.Keys[idx], nil
+}
+
+// GetChildAt returns the child ID at the specified index (internal nodes only)
+func (n *Node) GetChildAt(idx int) (string, error) {
+	if n.IsLeaf {
+		return "", ErrNotAnInternalNode
+	}
+
+	if idx < 0 || idx >= len(n.ChildrenIDs) {
+		return "", ErrChildIndexOutOfBounds
+	}
+
+	return n.ChildrenIDs[idx], nil
+}
+
+// GetChildForKey returns the child ID that should contain the given key (internal nodes only)
+// NOTE (gabrielopesantos): This is not really correct.
+func (n *Node) GetChildForKey(key string) (string, error) {
+	if n.IsLeaf {
+		return "", ErrNotAnInternalNode
+	}
+
+	idx, found := n.FindKeyIndex(key)
+	if found {
+		// Key found, return the child to its right
+		if idx+1 < len(n.ChildrenIDs) {
+			return n.ChildrenIDs[idx+1], nil
+		}
+	}
+
+	// Key not found or no right child, return the child to the left
+	if idx < len(n.ChildrenIDs) {
+		return n.ChildrenIDs[idx], nil
+	}
+
+	return "", ErrChildIndexOutOfBounds
+}
 
 // InsertKeyValue inserts a key-value pair (leaf nodes only)
 func (n *Node) InsertKeyValue(key, value string) error {
@@ -124,7 +182,7 @@ func (n *Node) InsertKeyValue(key, value string) error {
 		return ErrNotALeafNode
 	}
 
-	idx, keyExists := n.findKeyIndex(key)
+	idx, keyExists := n.FindKeyIndex(key)
 
 	if keyExists {
 		// Key exists, append value if not already present
@@ -140,13 +198,44 @@ func (n *Node) InsertKeyValue(key, value string) error {
 	return nil
 }
 
-// RemoveValueFromKey removes a specific value from a key (leaf nodes only)
+// InsertKeyChild inserts a key and child at the appropriate position (internal nodes only)
+func (n *Node) InsertKeyChild(key, childID string) error {
+	if n.IsLeaf {
+		return ErrNotAnInternalNode
+	}
+
+	idx, _ := n.FindKeyIndex(key)
+	n.Keys = slices.Insert(n.Keys, idx, key)
+	n.ChildrenIDs = slices.Insert(n.ChildrenIDs, idx+1, childID)
+	return nil
+}
+
+// RemoveKeyChildAt removes a key and its associated child at the specified index (internal nodes only)
+// NOTE (gabrielopesantos): This is also not correct.
+func (n *Node) RemoveKeyChildAt(idx int) error {
+	if n.IsLeaf {
+		return ErrNotAnInternalNode
+	}
+
+	if idx < 0 || idx >= len(n.Keys) {
+		return ErrKeyIndexOutOfBounds
+	}
+
+	n.Keys = slices.Delete(n.Keys, idx, idx+1)
+	// Remove the child to the right of the key
+	if idx+1 < len(n.ChildrenIDs) {
+		n.ChildrenIDs = slices.Delete(n.ChildrenIDs, idx+1, idx+2)
+	}
+	return nil
+}
+
+// RemoveValueFromKey removes the value, if exists, associated with the provided key
 func (n *Node) RemoveValueFromKey(key, value string) (RemovalResult, error) {
 	if !n.IsLeaf {
 		return Nil, ErrNotALeafNode
 	}
 
-	idx, found := n.findKeyIndex(key)
+	idx, found := n.FindKeyIndex(key)
 	if !found {
 		return KeyNotFound, nil
 	}
@@ -170,13 +259,13 @@ func (n *Node) RemoveValueFromKey(key, value string) (RemovalResult, error) {
 	return ValueRemoved, nil
 }
 
-// RemoveKey removes an entire key and all its values (leaf nodes only)
-func (n *Node) RemoveKey(key string) (RemovalResult, error) {
+// RemoveKeyValuesEntry removes a key and all values associated with it
+func (n *Node) RemoveKeyValuesEntry(key string) (RemovalResult, error) {
 	if !n.IsLeaf {
 		return Nil, ErrNotALeafNode
 	}
 
-	idx, found := n.findKeyIndex(key)
+	idx, found := n.FindKeyIndex(key)
 	if !found {
 		return KeyNotFound, nil
 	}
@@ -184,98 +273,6 @@ func (n *Node) RemoveKey(key string) (RemovalResult, error) {
 	n.Keys = slices.Delete(n.Keys, idx, idx+1)
 	n.Values = slices.Delete(n.Values, idx, idx+1)
 	return KeyRemoved, nil
-}
-
-// Internal node operations
-
-// InsertKeyChild inserts a key and child at the appropriate position (internal nodes only)
-func (n *Node) InsertKeyChild(key, childID string) error {
-	if n.IsLeaf {
-		return ErrNotAnInternalNode
-	}
-
-	idx, _ := n.findKeyIndex(key)
-	n.Keys = slices.Insert(n.Keys, idx, key)
-	n.ChildrenIDs = slices.Insert(n.ChildrenIDs, idx+1, childID)
-	return nil
-}
-
-// RemoveKeyChildAt removes a key and its associated child at the specified index (internal nodes only)
-func (n *Node) RemoveKeyChildAt(idx int) error {
-	if n.IsLeaf {
-		return ErrNotAnInternalNode
-	}
-
-	if idx < 0 || idx >= len(n.Keys) {
-		return ErrKeyIndexOutOfBounds
-	}
-
-	n.Keys = slices.Delete(n.Keys, idx, idx+1)
-	// Remove the child to the right of the key
-	if idx+1 < len(n.ChildrenIDs) {
-		n.ChildrenIDs = slices.Delete(n.ChildrenIDs, idx+1, idx+2)
-	}
-	return nil
-}
-
-// GetChildAt returns the child ID at the specified index (internal nodes only)
-func (n *Node) GetChildAt(idx int) (string, error) {
-	if n.IsLeaf {
-		return "", ErrNotAnInternalNode
-	}
-
-	if idx < 0 || idx >= len(n.ChildrenIDs) {
-		return "", ErrChildIndexOutOfBounds
-	}
-
-	return n.ChildrenIDs[idx], nil
-}
-
-// GetKeyAt returns the key at the specified index
-func (n *Node) GetKeyAt(idx int) (string, error) {
-	if idx < 0 || idx >= len(n.Keys) {
-		return "", ErrKeyIndexOutOfBounds
-	}
-
-	return n.Keys[idx], nil
-}
-
-// GetChildForKey returns the child ID that should contain the given key (internal nodes only)
-func (n *Node) GetChildForKey(key string) (string, error) {
-	if n.IsLeaf {
-		return "", ErrNotAnInternalNode
-	}
-
-	idx, found := n.findKeyIndex(key)
-	if found {
-		// Key found, return the child to its right
-		if idx+1 < len(n.ChildrenIDs) {
-			return n.ChildrenIDs[idx+1], nil
-		}
-	}
-
-	// Key not found or no right child, return the child to the left
-	if idx < len(n.ChildrenIDs) {
-		return n.ChildrenIDs[idx], nil
-	}
-
-	return "", ErrChildIndexOutOfBounds
-}
-
-// Low-level operations (for B+ tree internals)
-
-// findKeyIndex finds the index where a key should be inserted or is located
-// Returns the index and whether the key was found
-func (n *Node) findKeyIndex(key string) (int, bool) {
-	for i, k := range n.Keys {
-		if k == key {
-			return i, true
-		}
-		if key < k {
-			return i, false
-		}
-	}
-	return len(n.Keys), false
 }
 
 // RemoveKeyAt removes a key at the specified index (low-level operation)

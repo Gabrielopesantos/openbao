@@ -44,11 +44,11 @@ func TestHasKey(t *testing.T) {
 	require.False(t, node.HasKey("key2"))
 }
 
-func TestGetValues(t *testing.T) {
+func TestGetKeyValues(t *testing.T) {
 	node := NewLeafNode("leaf")
 
 	// Test non-existing key
-	values := node.GetValues("key1")
+	values := node.GetKeyValues("key1")
 	require.Empty(t, values)
 
 	// Add values
@@ -57,15 +57,15 @@ func TestGetValues(t *testing.T) {
 	node.InsertKeyValue("key2", "value3")
 
 	// Test existing key with multiple values
-	values = node.GetValues("key1")
+	values = node.GetKeyValues("key1")
 	require.Equal(t, []string{"value1", "value2"}, values)
 
 	// Test existing key with single value
-	values = node.GetValues("key2")
+	values = node.GetKeyValues("key2")
 	require.Equal(t, []string{"value3"}, values)
 
 	// Test non-existing key
-	values = node.GetValues("key3")
+	values = node.GetKeyValues("key3")
 	require.Empty(t, values)
 }
 
@@ -115,7 +115,7 @@ func TestIsEmpty(t *testing.T) {
 	require.False(t, node.IsEmpty())
 
 	// Remove key
-	node.RemoveKey("key1")
+	node.RemoveKeyValuesEntry("key1")
 	require.True(t, node.IsEmpty())
 }
 
@@ -186,7 +186,7 @@ func TestRemoveValueFromKey(t *testing.T) {
 	result, err := node.RemoveValueFromKey("key1", "value2")
 	require.NoError(t, err)
 	require.Equal(t, ValueRemoved, result)
-	require.Equal(t, []string{"value1"}, node.GetValues("key1"))
+	require.Equal(t, []string{"value1"}, node.GetKeyValues("key1"))
 
 	// Remove non-existing value
 	result, err = node.RemoveValueFromKey("key1", "nonexistent")
@@ -205,7 +205,7 @@ func TestRemoveValueFromKey(t *testing.T) {
 	require.Equal(t, KeyNotFound, result)
 }
 
-func TestRemoveKey(t *testing.T) {
+func TestRemoveKeyValuesEntry(t *testing.T) {
 	node := NewLeafNode("leaf")
 
 	// Setup test data
@@ -214,14 +214,14 @@ func TestRemoveKey(t *testing.T) {
 	node.InsertKeyValue("key2", "value3")
 
 	// Remove existing key
-	result, err := node.RemoveKey("key1")
+	result, err := node.RemoveKeyValuesEntry("key1")
 	require.NoError(t, err)
 	require.Equal(t, KeyRemoved, result)
 	require.False(t, node.HasKey("key1"))
 	require.Equal(t, []string{"key2"}, node.Keys)
 
 	// Remove non-existing key
-	result, err = node.RemoveKey("nonexistent")
+	result, err = node.RemoveKeyValuesEntry("nonexistent")
 	require.NoError(t, err)
 	require.Equal(t, KeyNotFound, result)
 }
@@ -396,32 +396,32 @@ func TestFindKeyIndex(t *testing.T) {
 	node.InsertKeyValue("key5", "value5")
 
 	// Test existing keys
-	idx, found := node.findKeyIndex("key1")
+	idx, found := node.FindKeyIndex("key1")
 	require.True(t, found)
 	require.Equal(t, 0, idx)
 
-	idx, found = node.findKeyIndex("key3")
+	idx, found = node.FindKeyIndex("key3")
 	require.True(t, found)
 	require.Equal(t, 1, idx)
 
-	idx, found = node.findKeyIndex("key5")
+	idx, found = node.FindKeyIndex("key5")
 	require.True(t, found)
 	require.Equal(t, 2, idx)
 
 	// Test non-existing keys (should return insertion position)
-	idx, found = node.findKeyIndex("key0") // Before all keys
+	idx, found = node.FindKeyIndex("key0") // Before all keys
 	require.False(t, found)
 	require.Equal(t, 0, idx)
 
-	idx, found = node.findKeyIndex("key2") // Between key1 and key3
+	idx, found = node.FindKeyIndex("key2") // Between key1 and key3
 	require.False(t, found)
 	require.Equal(t, 1, idx)
 
-	idx, found = node.findKeyIndex("key4") // Between key3 and key5
+	idx, found = node.FindKeyIndex("key4") // Between key3 and key5
 	require.False(t, found)
 	require.Equal(t, 2, idx)
 
-	idx, found = node.findKeyIndex("key6") // After all keys
+	idx, found = node.FindKeyIndex("key6") // After all keys
 	require.False(t, found)
 	require.Equal(t, 3, idx)
 }

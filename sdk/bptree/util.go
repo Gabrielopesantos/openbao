@@ -2,13 +2,13 @@ package bptree
 
 import "github.com/hashicorp/go-uuid"
 
-// genUUID generates a UUID
-func genUUID() string {
-	aUuid, err := uuid.GenerateUUID()
+// generateUUID generates a UUID
+func generateUUID() string {
+	aUUID, err := uuid.GenerateUUID()
 	if err != nil {
 		panic(err)
 	}
-	return aUuid
+	return aUUID
 }
 
 // calculatePrefixLimit calculates the smallest string that's lexicographically larger

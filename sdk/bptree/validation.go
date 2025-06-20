@@ -345,7 +345,7 @@ func (t *BPlusTree) validateSearchPaths(ctx context.Context, storage Storage, le
 		}
 
 		// Check that the key actually exists in the found leaf
-		_, found := leaf.findKeyIndex(key)
+		_, found := leaf.FindKeyIndex(key)
 		if !found {
 			result.Errors = append(result.Errors, fmt.Sprintf("Key '%s' not found in leaf node %s where search led", key, leaf.ID))
 		}

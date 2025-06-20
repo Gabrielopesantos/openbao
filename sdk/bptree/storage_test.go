@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// NOTE (gsantos): We probably do not want to test the Node's methods here, but only the storage nodeStorage
+// NOTE (gabrielopesantos): We probably do not want to test the Node's methods here, but only the storage nodeStorage
 func TestStorageOperations(t *testing.T) {
 	ctx := context.Background()
 	s := &logical.InmemStorage{}

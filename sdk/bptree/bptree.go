@@ -69,7 +69,7 @@ func NewBPlusTree(
 	}
 
 	// Create new leaf root
-	root := NewLeafNode(genUUID())
+	root := NewLeafNode(generateUUID())
 	if err := storage.SaveNode(ctx, root); err != nil {
 		return nil, fmt.Errorf("failed to save root node: %w", err)
 	}
@@ -114,7 +114,7 @@ func LoadExistingBPlusTree(
 		config: storedConfig,
 	}
 
-	// TODO (gsantos): Validate tree structure
+	// TODO (gabrielopesantos): Validate tree structure
 	// We need to be careful here because a full validation might be too expensive...
 	ctx = tree.contextWithTreeID(ctx)
 	rootID, err := tree.getRootID(ctx, storage)
@@ -238,7 +238,7 @@ func (t *BPlusTree) search(ctx context.Context, storage Storage, key string) ([]
 	}
 
 	// If we get here, we are at a leaf node
-	idx, found := leaf.findKeyIndex(key)
+	idx, found := leaf.FindKeyIndex(key)
 	if found {
 		// If the key is found, return the values
 		return leaf.Values[idx], true, nil
@@ -388,7 +388,7 @@ func (t *BPlusTree) Delete(ctx context.Context, storage Storage, key string) (bo
 	}
 
 	// Check if the key exists in the leaf node
-	idx, found := leaf.findKeyIndex(key)
+	idx, found := leaf.FindKeyIndex(key)
 	if !found {
 		return entryDeleted, nil // Key not found, nothing to delete
 	}
@@ -506,7 +506,7 @@ func (t *BPlusTree) findLeafNode(ctx context.Context, storage Storage, key strin
 
 func (t *BPlusTree) splitLeafNode(leaf *Node) (*Node, string) {
 	// Create a new leaf node
-	newLeaf := NewLeafNode(genUUID())
+	newLeaf := NewLeafNode(generateUUID())
 
 	// Split at the median index
 	splitIndex := int(math.Floor(float64(len(leaf.Keys)) / float64(2)))
@@ -540,7 +540,7 @@ func (t *BPlusTree) insertIntoParent(ctx context.Context, storage Storage, leftN
 		return fmt.Errorf("failed to get root ID: %w", err)
 	}
 	if leftNode.ID == rootID {
-		newRoot := NewInternalNode(genUUID())
+		newRoot := NewInternalNode(generateUUID())
 		newRoot.Keys = []string{splitKey}
 		newRoot.ChildrenIDs = []string{leftNode.ID, rightNode.ID}
 
@@ -607,7 +607,7 @@ func (t *BPlusTree) insertIntoParent(ctx context.Context, storage Storage, leftN
 
 func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node *Node) (*Node, string) {
 	// Create a new internal node
-	newInternal := NewInternalNode(genUUID())
+	newInternal := NewInternalNode(generateUUID())
 
 	// Split at the median index
 	splitIndex := int(math.Floor(float64(len(node.Keys)) / float64(2)))
