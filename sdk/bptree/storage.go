@@ -11,10 +11,9 @@ import (
 )
 
 const (
-	nodesPath    = "nodes"
-	rootPath     = "root"
-	metadataPath = "metadata"
-	configPath   = "config" // Path for tree configuration metadata
+	nodesPath  = "nodes"
+	rootPath   = "root"
+	configPath = "config"
 )
 
 type Storage interface {
@@ -44,9 +43,8 @@ var _ Storage = &NodeStorage{}
 type NodeStorage struct {
 	storage            logical.Storage
 	serializer         NodeSerializer
-	nodesLock          sync.RWMutex
-	rootLock           sync.RWMutex
 	skipCache          bool
+	lock               sync.RWMutex
 	cache              *lru.LRU[string, *Node]
 	pendingCacheOps    []cacheOperation // Operations to be applied on commit
 	cachesOpsQueueLock sync.Mutex
@@ -120,38 +118,36 @@ func NewTransactionalNodeStorage(
 	return nodeStorage, nil
 }
 
-// nodeKey constructs the storage key for a node, using tree ID from context if available
-func (s *NodeStorage) nodeKey(ctx context.Context, nodeID string) string {
-	treeID := GetTreeIDOrDefault(ctx, DefaultTreeID)
-	return treeID + "/" + nodesPath + "/" + nodeID
+// configKey constructs the storage key for tree metadata, using tree ID from context if available
+func configKey(ctx context.Context) string {
+	treeID := getTreeIDOrDefault(ctx, DefaultTreeID)
+	return treeID + "/" + configPath
 }
 
 // rootKey constructs the storage key for the root ID, using tree ID from context if available
-func (s *NodeStorage) rootKey(ctx context.Context) string {
-	treeID := GetTreeIDOrDefault(ctx, DefaultTreeID)
-	return treeID + "/" + metadataPath + "/" + rootPath
+func rootKey(ctx context.Context) string {
+	treeID := getTreeIDOrDefault(ctx, DefaultTreeID)
+	return treeID + "/" + rootPath
+}
+
+// nodeKey constructs the storage key for a node, using tree ID from context if available
+func nodeKey(ctx context.Context, nodeID string) string {
+	treeID := getTreeIDOrDefault(ctx, DefaultTreeID)
+	return treeID + "/" + nodesPath + "/" + nodeID
 }
 
 // cacheKey constructs the cache key for a node, using tree ID from context if available
-func (s *NodeStorage) cacheKey(ctx context.Context, nodeID string) string {
-	treeID := GetTreeIDOrDefault(ctx, DefaultTreeID)
+func cacheKey(ctx context.Context, nodeID string) string {
+	treeID := getTreeIDOrDefault(ctx, DefaultTreeID)
 	return treeID + ":" + nodeID
 }
 
-// configKey constructs the storage key for tree metadata, using tree ID from context if available
-func (s *NodeStorage) configKey(ctx context.Context) string {
-	treeID := GetTreeIDOrDefault(ctx, DefaultTreeID)
-	return treeID + "/" + metadataPath + "/" + configPath
-}
-
-// GetRootID gets the ID of the root node
+// GetRootID gets the root node identifier
 func (s *NodeStorage) GetRootID(ctx context.Context) (string, error) {
-	// Lock the root
-	s.rootLock.RLock()
-	defer s.rootLock.RUnlock()
+	s.lock.RLock()
+	defer s.lock.RUnlock()
 
-	path := s.rootKey(ctx)
-	entry, err := s.storage.Get(ctx, path)
+	entry, err := s.storage.Get(ctx, rootKey(ctx))
 	if err != nil {
 		return "", fmt.Errorf("failed to get root ID: %w", err)
 	}
@@ -163,15 +159,13 @@ func (s *NodeStorage) GetRootID(ctx context.Context) (string, error) {
 	return string(entry.Value), nil
 }
 
-// SetRootID sets the ID of the root node
+// SetRootID persists the root node identifier
 func (s *NodeStorage) SetRootID(ctx context.Context, id string) error {
-	// Lock the root
-	s.rootLock.Lock()
-	defer s.rootLock.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
-	path := s.rootKey(ctx)
 	entry := &logical.StorageEntry{
-		Key:   path,
+		Key:   rootKey(ctx),
 		Value: []byte(id),
 	}
 
@@ -184,21 +178,18 @@ func (s *NodeStorage) SetRootID(ctx context.Context, id string) error {
 
 // LoadNode loads a node from storage
 func (s *NodeStorage) LoadNode(ctx context.Context, id string) (*Node, error) {
-	// Lock the nodes for reading
-	s.nodesLock.RLock()
-	defer s.nodesLock.RUnlock()
+	s.lock.RLock()
+	defer s.lock.RUnlock()
 
 	// Try to get from cache first (unless cache is disabled)
 	if !s.skipCache {
-		cacheKey := s.cacheKey(ctx, id)
-		if node, ok := s.cache.Get(cacheKey); ok {
+		if node, ok := s.cache.Get(cacheKey(ctx, id)); ok {
 			return node, nil
 		}
 	}
 
 	// Load from storage
-	path := s.nodeKey(ctx, id)
-	entry, err := s.storage.Get(ctx, path)
+	entry, err := s.storage.Get(ctx, nodeKey(ctx, id))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load node %s: %w", id, err)
 	}
@@ -214,8 +205,7 @@ func (s *NodeStorage) LoadNode(ctx context.Context, id string) (*Node, error) {
 
 	// Cache the loaded node (immediate for non-transactional, queued for transactional)
 	if !s.skipCache {
-		cacheKey := s.cacheKey(ctx, id)
-		s.applyCacheOp(CacheOpAdd, cacheKey, node)
+		s.applyCacheOp(CacheOpAdd, cacheKey(ctx, id), node)
 	}
 
 	return node, nil
@@ -229,17 +219,16 @@ func (s *NodeStorage) SaveNode(ctx context.Context, node *Node) error {
 	}
 
 	// Lock storage for writing
-	s.nodesLock.Lock()
-	defer s.nodesLock.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
 	data, err := s.serializer.Serialize(node)
 	if err != nil {
 		return fmt.Errorf("failed to serialize node %s: %w", node.ID, err)
 	}
 
-	path := s.nodeKey(ctx, node.ID)
 	entry := &logical.StorageEntry{
-		Key:   path,
+		Key:   nodeKey(ctx, node.ID),
 		Value: data,
 	}
 
@@ -249,8 +238,7 @@ func (s *NodeStorage) SaveNode(ctx context.Context, node *Node) error {
 
 	// Cache the saved node (immediate for non-transactional, queued for transactional)
 	if !s.skipCache {
-		cacheKey := s.cacheKey(ctx, node.ID)
-		s.applyCacheOp(CacheOpAdd, cacheKey, node)
+		s.applyCacheOp(CacheOpAdd, cacheKey(ctx, node.ID), node)
 	}
 
 	return nil
@@ -259,18 +247,16 @@ func (s *NodeStorage) SaveNode(ctx context.Context, node *Node) error {
 // DeleteNode deletes a node from storage
 func (s *NodeStorage) DeleteNode(ctx context.Context, id string) error {
 	// Lock the nodes for writing
-	s.nodesLock.Lock()
-	defer s.nodesLock.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
-	path := s.nodeKey(ctx, id)
-	if err := s.storage.Delete(ctx, path); err != nil {
+	if err := s.storage.Delete(ctx, nodeKey(ctx, id)); err != nil {
 		return fmt.Errorf("failed to delete node %s: %w", id, err)
 	}
 
 	// Remove from cache (immediate for non-transactional, queued for transactional)
 	if !s.skipCache {
-		cacheKey := s.cacheKey(ctx, id)
-		s.applyCacheOp(CacheOpDelete, cacheKey, nil)
+		s.applyCacheOp(CacheOpDelete, cacheKey(ctx, id), nil)
 	}
 
 	return nil
@@ -278,11 +264,11 @@ func (s *NodeStorage) DeleteNode(ctx context.Context, id string) error {
 
 // GetTreeConfig gets the metadata for a tree
 func (s *NodeStorage) GetTreeConfig(ctx context.Context) (*BPlusTreeConfig, error) {
-	s.rootLock.RLock()
-	defer s.rootLock.RUnlock()
+	// Lock for reading the tree configuration
+	s.lock.RLock()
+	defer s.lock.RUnlock()
 
-	path := s.configKey(ctx)
-	entry, err := s.storage.Get(ctx, path)
+	entry, err := s.storage.Get(ctx, configKey(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tree metadata: %w", err)
 	}
@@ -301,17 +287,16 @@ func (s *NodeStorage) GetTreeConfig(ctx context.Context) (*BPlusTreeConfig, erro
 
 // SetTreeConfig sets the metadata for a tree
 func (s *NodeStorage) SetTreeConfig(ctx context.Context, config *BPlusTreeConfig) error {
-	s.rootLock.Lock()
-	defer s.rootLock.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
 	data, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal tree config: %w", err)
 	}
 
-	path := s.configKey(ctx)
 	entry := &logical.StorageEntry{
-		Key:   path,
+		Key:   configKey(ctx),
 		Value: data,
 	}
 
@@ -401,19 +386,6 @@ func (s *NodeStorage) flushCacheOps(apply bool) error {
 	return nil
 }
 
-// CacheStats returns information about the current cache state
-func (s *NodeStorage) CacheStats() (size int, pendingOps int) {
-	s.cachesOpsQueueLock.Lock()
-	pendingOps = len(s.pendingCacheOps)
-	s.cachesOpsQueueLock.Unlock()
-
-	// Return the configured cache size
-	if s.cache != nil {
-		return s.cache.Size(), pendingOps
-	}
-	return 0, pendingOps
-}
-
 // EnableCache enables or disables cache operations
 func (s *NodeStorage) EnableCache(enabled bool) {
 	s.skipCache = !enabled
@@ -427,113 +399,4 @@ func (s *NodeStorage) IsCacheEnabled() bool {
 // PurgeCache clears all entries from the cache
 func (s *NodeStorage) PurgeCache() {
 	s.cache.Purge()
-}
-
-type TransactionalNodeStorage struct {
-	*NodeStorage
-}
-
-var _ TransactionalStorage = &TransactionalNodeStorage{}
-
-type NodeTransaction struct {
-	*NodeStorage
-}
-
-var _ Transaction = &NodeTransaction{}
-
-func (s *TransactionalNodeStorage) BeginReadOnlyTx(ctx context.Context) (Transaction, error) {
-	tx, err := s.storage.(logical.TransactionalStorage).BeginReadOnlyTx(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return &NodeTransaction{
-		NodeStorage: &NodeStorage{
-			storage:    tx,
-			serializer: s.serializer,
-			cache:      s.cache, // Share cache for read-only transactions
-			skipCache:  false,   // Enable cache for read-only transactions
-			// New mutex instances for the transaction (read-only still needs its own locks)
-			nodesLock:          sync.RWMutex{},
-			rootLock:           sync.RWMutex{},
-			cachesOpsQueueLock: sync.Mutex{},
-			pendingCacheOps:    nil, // No cache operations for read-only
-		},
-	}, nil
-}
-
-func (s *TransactionalNodeStorage) BeginTx(ctx context.Context) (Transaction, error) {
-	tx, err := s.storage.(logical.TransactionalStorage).BeginTx(ctx) // Fix: was BeginReadOnlyTx
-	if err != nil {
-		return nil, err
-	}
-
-	return &NodeTransaction{
-		NodeStorage: &NodeStorage{
-			storage:    tx,
-			serializer: s.serializer,
-			cache:      s.cache, // Share cache within transactions
-			skipCache:  false,   // Enable cache within transactions
-			// New mutex instances for the transaction
-			nodesLock:          sync.RWMutex{},
-			rootLock:           sync.RWMutex{},
-			cachesOpsQueueLock: sync.Mutex{},
-			pendingCacheOps:    make([]cacheOperation, 0),
-		},
-	}, nil
-}
-
-func (s *NodeTransaction) Commit(ctx context.Context) error {
-	var err error
-	defer s.flushCacheOps(err == nil) // Ensure cache operations are flushed on commit
-
-	// Commit the underlying transaction first
-	if err = s.storage.(logical.Transaction).Commit(ctx); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (s *NodeTransaction) Rollback(ctx context.Context) error {
-	// Clear any pending cache operations (don't apply them)
-	s.flushCacheOps(false)
-
-	// Rollback the underlying transaction
-	return s.storage.(logical.Transaction).Rollback(ctx)
-}
-
-// WithTransaction will begin and end a transaction around the execution of the `callback` function.
-// If the storage supports transactions, it creates a transaction and passes it to the callback.
-// On success, the transaction is committed; on failure, it's rolled back.
-func WithTransaction(ctx context.Context, originalStorage Storage, callback func(Storage) error) error {
-	if txnStorage, ok := originalStorage.(TransactionalStorage); ok {
-		txn, err := txnStorage.BeginTx(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to begin transaction: %w", err)
-		}
-
-		// Ensure rollback is called if commit is not reached
-		defer func() {
-			if rollbackErr := txn.Rollback(ctx); rollbackErr != nil {
-				// Log rollback errors but don't override the main error
-				// In production, you might want to use a proper logger here
-			}
-		}()
-
-		// Execute the callback with the transaction storage
-		if err := callback(txn); err != nil {
-			return err
-		}
-
-		// Commit the transaction
-		if err := txn.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit transaction: %w", err)
-		}
-
-		return nil
-	} else {
-		// If storage doesn't support transactions, execute directly
-		return callback(originalStorage)
-	}
 }

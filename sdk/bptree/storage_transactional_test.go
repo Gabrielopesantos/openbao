@@ -13,36 +13,37 @@ import (
 )
 
 // createTransactionalStorage creates a transactional storage for testing
-func createTransactionalStorage() (logical.TransactionalStorage, error) {
+func createTransactionalStorage(t *testing.T) logical.TransactionalStorage {
 	// Create transactional inmem backend
 	inmemBackend, err := inmem.NewInmem(nil, nil)
-	if err != nil {
-		return nil, err
-	}
+	require.NoError(t, err, "Failed to create in-memory backend")
 
 	// Wrap it in logical storage
 	logicalStorage := logical.NewLogicalStorage(inmemBackend)
 
 	// Verify it's transactional
 	txnStorage, ok := logicalStorage.(logical.TransactionalStorage)
-	if !ok {
-		return nil, fmt.Errorf("logical storage is not transactional")
-	}
+	require.True(t, ok, "Logical storage should implement TransactionalStorage")
 
-	return txnStorage, nil
+	return txnStorage
+}
+
+// initTransactionalNodeStorageTest initializes a transactional node storage for testing
+func initTransactionalNodeStorageTest(t *testing.T) (context.Context, Storage) {
+	ctx := context.Background()
+	// Create transactional storage
+	s := createTransactionalStorage(t)
+
+	// Create transactional node storage
+	storage, err := NewTransactionalNodeStorage(s, nil, 100)
+	require.NoError(t, err, "Failed to create transactional node storage")
+
+	return ctx, storage
 }
 
 // TestTransactionalStorageBasics tests the basic transactional functionality
 func TestTransactionalStorageBasics(t *testing.T) {
-	ctx := context.Background()
-
-	// Create transactional logical storage
-	s, err := createTransactionalStorage()
-	require.NoError(t, err, "Failed to create transactional storage")
-
-	// Create transactional storage
-	storage, err := NewTransactionalNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage")
+	ctx, storage := initTransactionalNodeStorageTest(t)
 
 	// Check if storage supports transactions
 	txnStorage, ok := storage.(TransactionalStorage)
@@ -114,20 +115,15 @@ func TestTransactionalStorageBasics(t *testing.T) {
 
 // TestTransactionalStorageReadOnly tests read-only transaction behavior
 func TestTransactionalStorageReadOnly(t *testing.T) {
-	ctx := context.Background()
-	s, err := createTransactionalStorage()
-	require.NoError(t, err, "Failed to create transactional storage")
-
-	storage, err := NewTransactionalNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage")
+	ctx, storage := initTransactionalNodeStorageTest(t)
 
 	txnStorage := storage.(TransactionalStorage)
 	nodeStorage := storage.(*TransactionalNodeStorage)
 
 	// First, set up some data outside of transaction
 	node := NewLeafNode("test-node")
-	node.Keys = []string{"key1"}
-	node.Values = [][]string{{"value1"}}
+	err := node.InsertKeyValue("key1", "value1")
+	require.NoError(t, err, "Failed to insert key-value pair into node")
 
 	err = nodeStorage.SaveNode(ctx, node)
 	require.NoError(t, err, "Failed to save initial node")
@@ -181,13 +177,7 @@ func TestTransactionalStorageReadOnly(t *testing.T) {
 
 // TestTransactionalStorageIsolation tests transaction isolation
 func TestTransactionalStorageIsolation(t *testing.T) {
-	ctx := context.Background()
-	s, err := createTransactionalStorage()
-	require.NoError(t, err, "Failed to create transactional storage")
-
-	storage, err := NewTransactionalNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage")
-
+	ctx, storage := initTransactionalNodeStorageTest(t)
 	txnStorage := storage.(TransactionalStorage)
 
 	t.Run("WriteIsolation", func(t *testing.T) {
@@ -196,8 +186,8 @@ func TestTransactionalStorageIsolation(t *testing.T) {
 		require.NoError(t, err, "Failed to begin first transaction")
 
 		node1 := NewLeafNode("isolation-node")
-		node1.Keys = []string{"key1"}
-		node1.Values = [][]string{{"value1"}}
+		err = node1.InsertKeyValue("key1", "value1")
+		require.NoError(t, err, "Failed to insert key-value pair into node")
 
 		err = txn1.SaveNode(ctx, node1)
 		require.NoError(t, err, "Failed to save node in first transaction")
@@ -240,12 +230,7 @@ func TestTransactionalStorageIsolation(t *testing.T) {
 
 // TestTransactionalStorageRollback tests rollback behavior
 func TestTransactionalStorageRollback(t *testing.T) {
-	ctx := context.Background()
-	s, err := createTransactionalStorage()
-	require.NoError(t, err, "Failed to create transactional storage")
-
-	storage, err := NewTransactionalNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage")
+	ctx, storage := initTransactionalNodeStorageTest(t)
 
 	txnStorage := storage.(TransactionalStorage)
 	nodeStorage := storage.(*TransactionalNodeStorage)
@@ -256,8 +241,8 @@ func TestTransactionalStorageRollback(t *testing.T) {
 		require.NoError(t, err, "Failed to begin transaction")
 
 		node := NewLeafNode("rollback-node")
-		node.Keys = []string{"key1"}
-		node.Values = [][]string{{"value1"}}
+		node.InsertKeyValue("key1", "value1")
+		require.NoError(t, err, "Failed to insert key-value pair into node")
 
 		err = txn.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
@@ -282,12 +267,7 @@ func TestTransactionalStorageRollback(t *testing.T) {
 
 // TestTransactionalStorageCommit tests commit behavior
 func TestTransactionalStorageCommit(t *testing.T) {
-	ctx := context.Background()
-	s, err := createTransactionalStorage()
-	require.NoError(t, err, "Failed to create transactional storage")
-
-	storage, err := NewTransactionalNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage")
+	ctx, storage := initTransactionalNodeStorageTest(t)
 
 	txnStorage := storage.(TransactionalStorage)
 	nodeStorage := storage.(*TransactionalNodeStorage)
@@ -326,12 +306,7 @@ func TestTransactionalStorageCommit(t *testing.T) {
 
 // TestTransactionalStorageCache tests cache behavior in transactions
 func TestTransactionalStorageCache(t *testing.T) {
-	ctx := context.Background()
-	s, err := createTransactionalStorage()
-	require.NoError(t, err, "Failed to create transactional storage")
-
-	storage, err := NewTransactionalNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage")
+	ctx, storage := initTransactionalNodeStorageTest(t)
 
 	txnStorage := storage.(TransactionalStorage)
 	nodeStorage := storage.(*TransactionalNodeStorage)
@@ -339,10 +314,10 @@ func TestTransactionalStorageCache(t *testing.T) {
 	t.Run("TransactionCacheIsolation", func(t *testing.T) {
 		// Create initial data outside transaction
 		node1 := NewLeafNode("cache-node-1")
-		node1.Keys = []string{"key1"}
-		node1.Values = [][]string{{"value1"}}
+		err := node1.InsertKeyValue("key1", "value1")
+		require.NoError(t, err, "Failed to insert key-value pair into node")
 
-		err := nodeStorage.SaveNode(ctx, node1)
+		err = nodeStorage.SaveNode(ctx, node1)
 		require.NoError(t, err, "Failed to save initial node")
 
 		// Start transaction
@@ -351,19 +326,24 @@ func TestTransactionalStorageCache(t *testing.T) {
 
 		// Create new node in transaction
 		node2 := NewLeafNode("cache-node-2")
-		node2.Keys = []string{"key2"}
-		node2.Values = [][]string{{"value2"}}
+		err = node2.InsertKeyValue("key2", "value2")
+		require.NoError(t, err, "Failed to insert key-value pair into node")
 
 		err = txn.SaveNode(ctx, node2)
 		require.NoError(t, err, "Failed to save node in transaction")
 
 		// Should be able to read the new node within the transaction
+		// TODO (gabrielopesantos): Queues the same op twice...
 		loadedNode, err := txn.LoadNode(ctx, "cache-node-2")
 		require.NoError(t, err, "Failed to load node within transaction")
 		require.NotNil(t, loadedNode, "Node should be accessible within transaction")
 		require.Equal(t, node2.Keys, loadedNode.Keys, "Keys should match")
 
 		// Outside the transaction, the node should not be visible yet
+		cachedNodeOutside, ok := nodeStorage.cache.Get("cache-node-2")
+		require.False(t, ok, "Node should not be in cache outside transaction")
+		require.Nil(t, cachedNodeOutside, "Cached node should be nil outside transaction")
+
 		loadedNodeOutside, err := nodeStorage.LoadNode(ctx, "cache-node-2")
 		require.NoError(t, err, "Loading should not error")
 		require.Nil(t, loadedNodeOutside, "Node should not be visible outside transaction")
@@ -372,7 +352,12 @@ func TestTransactionalStorageCache(t *testing.T) {
 		err = txn.Commit(ctx)
 		require.NoError(t, err, "Failed to commit transaction")
 
-		// Now the node should be visible outside transaction
+		// Now the node should be visible outside the transaction
+		cachedNodeAfterCommit, ok := nodeStorage.cache.Get(cacheKey(ctx, "cache-node-2"))
+		require.True(t, ok, "Node should be in cache after commit")
+		require.NotNil(t, cachedNodeAfterCommit, "Cached node should not be nil after commit")
+		require.Equal(t, node2.Keys, cachedNodeAfterCommit.Keys, "Cached node keys should match")
+
 		loadedNodeAfterCommit, err := nodeStorage.LoadNode(ctx, "cache-node-2")
 		require.NoError(t, err, "Failed to load node after commit")
 		require.NotNil(t, loadedNodeAfterCommit, "Node should be visible after commit")
@@ -386,14 +371,13 @@ func TestTransactionalStorageCache(t *testing.T) {
 
 		// Create node in transaction
 		node := NewLeafNode("queue-node")
-		node.Keys = []string{"key1"}
-		node.Values = [][]string{{"value1"}}
+		node.InsertKeyValue("key1", "value1")
 
 		err = txn.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node in transaction")
 
 		// The cache operations should be queued, not immediately applied to main cache
-		// We can't directly test this without accessing internals, but we can test the behavior
+		// There's no direct way to check the cache state here, but we can check after commit
 
 		// Rollback transaction
 		err = txn.Rollback(ctx)
@@ -408,12 +392,7 @@ func TestTransactionalStorageCache(t *testing.T) {
 
 // TestTransactionalStorageConcurrency tests concurrent transaction behavior
 func TestTransactionalStorageConcurrency(t *testing.T) {
-	ctx := context.Background()
-	s, err := createTransactionalStorage()
-	require.NoError(t, err, "Failed to create transactional storage")
-
-	storage, err := NewTransactionalNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage")
+	ctx, storage := initTransactionalNodeStorageTest(t)
 
 	txnStorage := storage.(TransactionalStorage)
 	nodeStorage := storage.(*TransactionalNodeStorage)
@@ -423,7 +402,7 @@ func TestTransactionalStorageConcurrency(t *testing.T) {
 		errChan := make(chan error, 10)
 
 		// Launch multiple concurrent transactions
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
@@ -477,7 +456,7 @@ func TestTransactionalStorageConcurrency(t *testing.T) {
 		}
 
 		// Verify all nodes were created
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			nodeID := fmt.Sprintf("concurrent-node-%d", i)
 			loadedNode, err := nodeStorage.LoadNode(ctx, nodeID)
 			require.NoError(t, err, "Failed to load node %d", i)
@@ -489,12 +468,8 @@ func TestTransactionalStorageConcurrency(t *testing.T) {
 
 // TestWithTransactionHelper tests the WithTransaction helper function
 func TestWithTransactionHelper(t *testing.T) {
-	ctx := context.Background()
-	s, err := createTransactionalStorage()
-	require.NoError(t, err, "Failed to create transactional storage")
+	ctx, storage := initTransactionalNodeStorageTest(t)
 
-	storage, err := NewTransactionalNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage")
 	nodeStorage := storage.(*TransactionalNodeStorage)
 
 	t.Run("WithTransactionSuccess", func(t *testing.T) {
@@ -558,9 +533,7 @@ func TestWithTransactionHelper(t *testing.T) {
 // TestTransactionalStorageUtilityMethods tests cache utility methods
 func TestTransactionalStorageUtilityMethods(t *testing.T) {
 	ctx := context.Background()
-	s, err := createTransactionalStorage()
-	require.NoError(t, err, "Failed to create transactional storage")
-
+	s := createTransactionalStorage(t)
 	storage, err := NewTransactionalNodeStorage(s, nil, 100)
 	require.NoError(t, err, "Failed to create storage")
 	nodeStorage := storage.(*TransactionalNodeStorage)
@@ -572,8 +545,7 @@ func TestTransactionalStorageUtilityMethods(t *testing.T) {
 
 		// Add some data to get cache stats
 		node := NewLeafNode("utils-node")
-		node.Keys = []string{"key1"}
-		node.Values = [][]string{{"value1"}}
+		node.InsertKeyValue("key1", "value1")
 
 		err := nodeStorage.SaveNode(ctx, node)
 		require.NoError(t, err, "Failed to save node")
@@ -582,16 +554,31 @@ func TestTransactionalStorageUtilityMethods(t *testing.T) {
 		_, err = nodeStorage.LoadNode(ctx, "utils-node")
 		require.NoError(t, err, "Failed to load node")
 
-		size, pendingOps := nodeStorage.CacheStats()
-		require.Greater(t, size, 0, "Cache size should be greater than 0")
-		require.GreaterOrEqual(t, pendingOps, 0, "Pending ops should be >= 0")
-
 		// Test purge cache
 		nodeStorage.PurgeCache()
+
+		// Verify cache is empty
+		_, ok := nodeStorage.cache.Get("utils-node")
+		require.False(t, ok, "Cache should be empty after purge")
 
 		// Test disable cache
 		nodeStorage.EnableCache(false)
 		require.False(t, nodeStorage.IsCacheEnabled(), "Cache should be disabled")
+
+		// Re-insert data to see if it works without cache
+		err = nodeStorage.SaveNode(ctx, node)
+		require.NoError(t, err, "Failed to save node with cache disabled")
+
+		// Try to load the node from cache
+		_, ok = nodeStorage.cache.Get("utils-node")
+		require.False(t, ok, "Cache should not contain node when cache is disabled")
+
+		// Load node to verify it works without cache
+		loadedNode, err := nodeStorage.LoadNode(ctx, "utils-node")
+		require.NoError(t, err, "Failed to load node with cache disabled")
+		require.NotNil(t, loadedNode, "Loaded node should not be nil")
+		require.Equal(t, node.Keys, loadedNode.Keys, "Keys should match after loading with cache disabled")
+		require.Equal(t, node.Values, loadedNode.Values, "Values should match after loading with cache disabled")
 
 		// Re-enable cache
 		nodeStorage.EnableCache(true)

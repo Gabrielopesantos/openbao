@@ -12,9 +12,9 @@ import (
 
 // BPlusTree represents a B+ tree data structure
 type BPlusTree struct {
-	config       *BPlusTreeConfig // Configuration for the B+ tree
+	config       *BPlusTreeConfig // B+Tree configuration
 	lock         sync.RWMutex     // Mutex to protect concurrent access
-	cachedRootID string           // Cached root  ID
+	cachedRootID string           // Cached root ID
 }
 
 // InitializeBPlusTree initializes a tree, creating it if it doesn't exist or loading it if it does.
@@ -26,7 +26,7 @@ func InitializeBPlusTree(
 ) (*BPlusTree, error) {
 	if config == nil {
 		config = NewDefaultBPlusTreeConfig()
-	} else if err := validateConfig(config); err != nil {
+	} else if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
@@ -50,14 +50,12 @@ func NewBPlusTree(
 	if config == nil {
 		return nil, fmt.Errorf("config is required for tree creation")
 	}
-	if err := validateConfig(config); err != nil {
+	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	tree := &BPlusTree{
-		config: config,
-	}
-	ctx = tree.contextWithTreeID(ctx)
+	// Add the treeID to the context
+	ctx = config.contextWithTreeID(ctx)
 
 	// Check if tree already exists
 	existingConfig, err := storage.GetTreeConfig(ctx)
@@ -66,6 +64,10 @@ func NewBPlusTree(
 	}
 	if existingConfig != nil {
 		return nil, fmt.Errorf("tree (%s) already exists", config.TreeID)
+	}
+
+	tree := &BPlusTree{
+		config: config,
 	}
 
 	// Create new leaf root
@@ -97,8 +99,8 @@ func LoadExistingBPlusTree(
 	if treeID == "" {
 		return nil, fmt.Errorf("treeID cannot be empty")
 	}
-
-	ctx = WithTreeID(ctx, treeID)
+	// Add the TreeID to the context
+	ctx = withTreeID(ctx, treeID)
 
 	// Get stored configuration - this is the source of truth
 	storedConfig, err := storage.GetTreeConfig(ctx)
@@ -184,11 +186,7 @@ func (t *BPlusTree) setRootID(ctx context.Context, storage Storage, newRootID st
 
 // contextWithTreeID returns a context with the tree's ID added, enabling multi-tree storage
 func (t *BPlusTree) contextWithTreeID(ctx context.Context) context.Context {
-	if t.config.TreeID != "" {
-		return WithTreeID(ctx, t.config.TreeID)
-	}
-
-	return ctx
+	return t.config.contextWithTreeID(ctx)
 }
 
 // maxChildrenNodes returns the maximum number of children an internal node can have

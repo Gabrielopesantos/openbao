@@ -644,7 +644,7 @@ func TestBPlusTreeDuplicateValues(t *testing.T) {
 
 	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "duplicate_values_test", Order: 4})
 	require.NoError(t, err, "Failed to create B+ tree")
-	ctx = WithTreeID(ctx, "duplicate_values_test")
+	ctx = withTreeID(ctx, "duplicate_values_test")
 
 	// Insert initial values
 	err = tree.Insert(ctx, storage, "key1", "value1")
@@ -690,7 +690,7 @@ func TestNextIDLinking(t *testing.T) {
 	// Use a small order to force splits
 	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "nextid_linking_test", Order: 3})
 	require.NoError(t, err, "Failed to create B+ tree")
-	ctx = WithTreeID(ctx, "nextid_linking_test")
+	ctx = withTreeID(ctx, "nextid_linking_test")
 
 	t.Run("SingleLeafNode", func(t *testing.T) {
 		// Insert into root leaf - should have empty NextID initially
@@ -1079,7 +1079,7 @@ func TestSearchPrefixWithNextIDTraversal(t *testing.T) {
 	// Use very small order to force many splits and multiple leaf nodes
 	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "search_prefix_nextid", Order: 3})
 	require.NoError(t, err)
-	ctx = WithTreeID(ctx, "search_prefix_nextid")
+	ctx = withTreeID(ctx, "search_prefix_nextid")
 
 	// Insert many keys to create multiple leaf nodes
 	numKeys := 20
