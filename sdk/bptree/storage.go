@@ -389,6 +389,12 @@ func (s *NodeStorage) flushCacheOps(apply bool) error {
 // EnableCache enables or disables cache operations
 func (s *NodeStorage) EnableCache(enabled bool) {
 	s.skipCache = !enabled
+	if !enabled {
+		// If cache is disabled, clear any pending operations
+		s.flushCacheOps(false)
+		// Clear the cache immediately
+		s.cache.Purge()
+	}
 }
 
 // IsCacheEnabled returns whether cache operations are enabled
