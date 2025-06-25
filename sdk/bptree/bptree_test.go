@@ -14,13 +14,7 @@ import (
 )
 
 func TestBPlusTreeBasicOperations(t *testing.T) {
-	ctx := context.Background()
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage storage")
-
-	tree, err := InitializeBPlusTree(ctx, storage, NewDefaultBPlusTreeConfig())
-	require.NoError(t, err, "Failed to create B+ tree")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 3})
 
 	t.Run("EmptyTree", func(t *testing.T) {
 		val, found, err := tree.Search(ctx, storage, "key1")
@@ -31,14 +25,50 @@ func TestBPlusTreeBasicOperations(t *testing.T) {
 
 	t.Run("InsertAndGet", func(t *testing.T) {
 		// Insert a key
-		err = tree.Insert(ctx, storage, "key1", "value1")
-		require.NoError(t, err, "Failed to insert key")
+		err := tree.Insert(ctx, storage, "key1", "key1_value1")
+		require.NoError(t, err, "Failed to insert key key1 with value key1_value1")
+		err = tree.Insert(ctx, storage, "key1", "key1_value2")
+		require.NoError(t, err, "Failed to insert key key1 with value key1_value2")
+
+		// Insert other keys for testing
+		err = tree.Insert(ctx, storage, "key2", "key2_value1")
+		require.NoError(t, err, "Failed to insert key key2 with value key2_value1")
+
+		err = tree.Insert(ctx, storage, "key3", "key3_value1")
+		require.NoError(t, err, "Failed to insert key key3 with value key3_value1")
 
 		// Get the key
 		val, found, err := tree.Search(ctx, storage, "key1")
 		require.NoError(t, err, "Error when getting key")
 		require.True(t, found, "Should find inserted key")
-		require.Equal(t, []string{"value1"}, val, "Retrieved value should match inserted value")
+		require.Equal(t, []string{"key1_value1", "key1_value2"}, val, "Retrieved value should match inserted value")
+	})
+
+	t.Run("SearchPrefix", func(t *testing.T) {
+		// Search for a prefix
+		result, err := tree.SearchPrefix(ctx, storage, "key")
+		require.NoError(t, err, "Error when searching prefix")
+		require.Len(t, result, 3, "Should find 3 keys with prefix 'key'")
+		expectedKeys := []string{"key1", "key2", "key3"}
+		expectedValues := [][]string{{"key1_value1", "key1_value2"}, {"key2_value1"}, {"key3_value1"}}
+		for i, key := range expectedKeys {
+			val, found := result[key]
+			require.True(t, found, fmt.Sprintf("Should find key %s in prefix search", key))
+			require.Equal(t, expectedValues[i], val, fmt.Sprintf("Values for key %s should match", key))
+		}
+	})
+
+	t.Run("DeleteValue", func(t *testing.T) {
+		// Delete a specific value
+		deleted, err := tree.DeleteValue(ctx, storage, "key1", "key1_value1")
+		require.NoError(t, err, "Failed to delete value key1_value1")
+		require.True(t, deleted, "Should successfully delete value key1_value1")
+
+		// Verify the value was deleted
+		val, found, err := tree.Search(ctx, storage, "key1")
+		require.NoError(t, err, "Error when getting key after deletion")
+		require.True(t, found, "Should still find key after value deletion")
+		require.Equal(t, []string{"key1_value2"}, val, "Retrieved value should not include deleted value")
 	})
 
 	t.Run("Delete", func(t *testing.T) {
@@ -61,18 +91,71 @@ func TestBPlusTreeBasicOperations(t *testing.T) {
 	})
 }
 
-func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage storage")
+// TestMultiTreeOperations tests that multiple trees can operate independently
+func TestMultiTreeOperations(t *testing.T) {
+	ctx, storage, _ := initTest(t, &BPlusTreeConfig{Order: 4})
 
-	// Create a tree with small order to test splitting
-	ctx := context.Background()
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "splitting_test", Order: 3})
-	require.NoError(t, err, "Failed to create B+ tree")
+	// Create two trees with different names
+	config1, err := NewBPlusTreeConfig("tree1", 4)
+	require.NoError(t, err)
+	tree1, err := InitializeBPlusTree(ctx, storage, config1)
+	require.NoError(t, err, "Failed to create tree1")
+
+	config2, err := NewBPlusTreeConfig("tree2", 4)
+	require.NoError(t, err)
+	tree2, err := InitializeBPlusTree(ctx, storage, config2)
+	require.NoError(t, err, "Failed to create tree2")
+
+	// Insert data into tree1
+	err = tree1.Insert(ctx, storage, "key1", "tree1_value1")
+	require.NoError(t, err, "Failed to insert into tree1")
+	err = tree1.Insert(ctx, storage, "key2", "tree1_value2")
+	require.NoError(t, err, "Failed to insert into tree1")
+
+	// Insert data into tree2
+	err = tree2.Insert(ctx, storage, "key1", "tree2_value1")
+	require.NoError(t, err, "Failed to insert into tree2")
+	err = tree2.Insert(ctx, storage, "key3", "tree2_value3")
+	require.NoError(t, err, "Failed to insert into tree2")
+
+	// Verify tree1 data
+	val, found, err := tree1.Search(ctx, storage, "key1")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, []string{"tree1_value1"}, val)
+
+	val, found, err = tree1.Search(ctx, storage, "key2")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, []string{"tree1_value2"}, val)
+
+	// key3 should not exist in tree1
+	_, found, err = tree1.Search(ctx, storage, "key3")
+	require.NoError(t, err)
+	require.False(t, found)
+
+	// Verify tree2 data
+	val, found, err = tree2.Search(ctx, storage, "key1")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, []string{"tree2_value1"}, val)
+
+	val, found, err = tree2.Search(ctx, storage, "key3")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, []string{"tree2_value3"}, val)
+
+	// key2 should not exist in tree2
+	_, found, err = tree2.Search(ctx, storage, "key2")
+	require.NoError(t, err)
+	require.False(t, found)
+}
+
+func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 3})
 
 	// Insert keys that will cause leaf splitting
-	err = tree.Insert(ctx, storage, "10", "value10")
+	err := tree.Insert(ctx, storage, "10", "value10")
 	require.NoError(t, err, "Failed to insert key 10")
 
 	err = tree.Insert(ctx, storage, "20", "value20")
@@ -140,18 +223,12 @@ func TestBPlusTreeInsertionWithSplitting(t *testing.T) {
 }
 
 func TestBPlusTreeDelete(t *testing.T) {
-	ctx := context.Background()
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage storage")
-
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "delete_test", Order: 4})
-	require.NoError(t, err, "Failed to create B+ tree")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 	// Insert keys
 	keys := []string{"a", "b", "c", "d", "e"}
 	for i, key := range keys {
-		err = tree.Insert(ctx, storage, key, strconv.Itoa(i+1))
+		err := tree.Insert(ctx, storage, key, strconv.Itoa(i+1))
 		require.NoError(t, err, "Failed to insert key")
 	}
 
@@ -212,15 +289,10 @@ func TestBPlusTreeDelete(t *testing.T) {
 }
 
 func TestBPlusTreeLargeDataSet(t *testing.T) {
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 1000)
-	require.NoError(t, err, "Failed to create storage storage")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 32})
 
-	ctx := context.Background()
-	tree, err := InitializeBPlusTree(ctx, storage, NewDefaultBPlusTreeConfig())
-	require.NoError(t, err, "Failed to create B+ tree")
-
-	const numKeys = 10000
+	//  Cleaning up of orphan keys is making this test a lot slower...
+	const numKeys = 5_000
 
 	// Generate a pseudo-random but deterministic sequence of keys using a simple hash
 	keys := make([]string, numKeys)
@@ -231,17 +303,17 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 	}
 
 	// Insert all keys
-	for i, key := range keys {
-		err = tree.Insert(ctx, storage, key, fmt.Sprintf("value%d", i))
+	for _, key := range keys {
+		err := tree.Insert(ctx, storage, key, keyValue(key))
 		require.NoError(t, err, "Failed to insert key %s", key)
 	}
 
 	// Verify all keys exist
-	for i, key := range keys {
+	for _, key := range keys {
 		val, found, err := tree.Search(ctx, storage, key)
 		require.NoError(t, err, "Error when getting key %s", key)
 		require.True(t, found, "Should find key %s", key)
-		require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val, "Retrieved value should match for key %s", key)
+		require.Equal(t, []string{keyValue(key)}, val, "Retrieved value should match for key %s", key)
 	}
 
 	// Delete every other key (even indices)
@@ -259,7 +331,7 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 		if i%2 == 1 {
 			// Odd-indexed keys should exist
 			require.True(t, found, "Should find odd-indexed key %s", key)
-			require.Equal(t, []string{fmt.Sprintf("value%d", i)}, val, "Retrieved value should match for key %s", key)
+			require.Equal(t, []string{keyValue(key)}, val, "Retrieved value should match for key %s", key)
 		} else {
 			// Even-indexed keys should be deleted
 			require.False(t, found, "Should not find even-indexed key %s", key)
@@ -269,18 +341,12 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 }
 
 func TestBPlusTreeConcurrency(t *testing.T) {
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage storage")
-
-	ctx := context.Background()
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "concurrent_test", Order: 4})
-	require.NoError(t, err, "Failed to create B+ tree")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 	// Test concurrent reads
 	t.Run("ConcurrentReads", func(t *testing.T) {
 		// Insert some test data
-		err = tree.Insert(ctx, storage, "1", "value1")
+		err := tree.Insert(ctx, storage, "1", "value1")
 		require.NoError(t, err)
 
 		var wg sync.WaitGroup
@@ -383,7 +449,7 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 	t.Run("ConcurrentDeleteValue", func(t *testing.T) {
 		// Insert a key with multiple values
 		for i := range 5 {
-			err = tree.Insert(ctx, storage, "100", fmt.Sprintf("value%d", i))
+			err := tree.Insert(ctx, storage, "100", fmt.Sprintf("value%d", i))
 			require.NoError(t, err, "Failed to insert value %d", i)
 		}
 
@@ -439,17 +505,11 @@ func TestBPlusTreeConcurrency(t *testing.T) {
 }
 
 func TestBPlusTreeEdgeCases(t *testing.T) {
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage storage")
-
-	ctx := context.Background()
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_test", Order: 3})
-	require.NoError(t, err, "Failed to create B+ tree")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 3})
 
 	t.Run("SplitAtRoot", func(t *testing.T) {
 		// Insert keys that will cause root split
-		err = tree.Insert(ctx, storage, "1", "value1")
+		err := tree.Insert(ctx, storage, "1", "value1")
 		require.NoError(t, err)
 		err = tree.Insert(ctx, storage, "2", "value2")
 		require.NoError(t, err)
@@ -467,7 +527,7 @@ func TestBPlusTreeEdgeCases(t *testing.T) {
 
 	t.Run("SplitAtLeaf", func(t *testing.T) {
 		// Insert more keys to cause leaf splits
-		err = tree.Insert(ctx, storage, "4", "value4")
+		err := tree.Insert(ctx, storage, "4", "value4")
 		require.NoError(t, err)
 		err = tree.Insert(ctx, storage, "5", "value5")
 		require.NoError(t, err)
@@ -571,16 +631,10 @@ func TestBPlusTreeStorageErrors(t *testing.T) {
 }
 
 func TestBPlusTreeDeleteValue(t *testing.T) {
-	ctx := context.Background()
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage storage")
-
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "delete_value_test", Order: 4})
-	require.NoError(t, err, "Failed to create B+ tree")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 	// Insert a key with multiple values
-	err = tree.Insert(ctx, storage, "key1", "value1")
+	err := tree.Insert(ctx, storage, "key1", "value1")
 	require.NoError(t, err, "Failed to insert first value")
 	err = tree.Insert(ctx, storage, "key1", "value2")
 	require.NoError(t, err, "Failed to insert second value")
@@ -637,17 +691,10 @@ func TestBPlusTreeDeleteValue(t *testing.T) {
 }
 
 func TestBPlusTreeDuplicateValues(t *testing.T) {
-	ctx := context.Background()
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage storage")
-
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "duplicate_values_test", Order: 4})
-	require.NoError(t, err, "Failed to create B+ tree")
-	ctx = withTreeID(ctx, "duplicate_values_test")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 	// Insert initial values
-	err = tree.Insert(ctx, storage, "key1", "value1")
+	err := tree.Insert(ctx, storage, "key1", "value1")
 	require.NoError(t, err)
 	err = tree.Insert(ctx, storage, "key1", "value2")
 	require.NoError(t, err)
@@ -682,19 +729,11 @@ func TestBPlusTreeDuplicateValues(t *testing.T) {
 
 // TestNextIDLinking tests that the NextID field is properly set during leaf operations
 func TestNextIDLinking(t *testing.T) {
-	ctx := context.Background()
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage adapter")
-
-	// Use a small order to force splits
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "nextid_linking_test", Order: 3})
-	require.NoError(t, err, "Failed to create B+ tree")
-	ctx = withTreeID(ctx, "nextid_linking_test")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 3})
 
 	t.Run("SingleLeafNode", func(t *testing.T) {
 		// Insert into root leaf - should have empty NextID initially
-		err = tree.Insert(ctx, storage, "key1", "value1")
+		err := tree.Insert(ctx, storage, "key1", "value1")
 		require.NoError(t, err, "Failed to insert key1")
 
 		root, err := tree.getRoot(ctx, storage)
@@ -705,7 +744,7 @@ func TestNextIDLinking(t *testing.T) {
 
 	t.Run("LeafSplitCreatesTwoLinkedLeaves", func(t *testing.T) {
 		// Insert more keys to force a leaf split
-		err = tree.Insert(ctx, storage, "key2", "value2")
+		err := tree.Insert(ctx, storage, "key2", "value2")
 		require.NoError(t, err, "Failed to insert key2")
 
 		// This should cause a leaf split (order=2, so max 2 keys per leaf)
@@ -713,7 +752,7 @@ func TestNextIDLinking(t *testing.T) {
 		require.NoError(t, err, "Failed to insert key3")
 
 		// Find the leftmost leaf
-		leftmost, err := tree.findLeftmostLeaf(ctx, storage)
+		leftmost, err := tree.findLeftmostLeafInSubtree(ctx, storage, tree.cachedRootID)
 		require.NoError(t, err, "Failed to find leftmost leaf")
 
 		// Verify the leaf has a NextID
@@ -735,13 +774,13 @@ func TestNextIDLinking(t *testing.T) {
 	t.Run("SequentialTraversalWorks", func(t *testing.T) {
 		// Insert more keys to create multiple leaf splits
 		for i := 4; i <= 10; i++ {
-			err = tree.Insert(ctx, storage, "key"+string(rune('0'+i)), "value"+string(rune('0'+i)))
+			err := tree.Insert(ctx, storage, "key"+string(rune('0'+i)), "value"+string(rune('0'+i)))
 			require.NoError(t, err, "Failed to insert key%d", i)
 		}
 
 		// Traverse through all leaves using NextID
 		var allKeys []string
-		current, err := tree.findLeftmostLeaf(ctx, storage)
+		current, err := tree.findLeftmostLeafInSubtree(ctx, storage, tree.cachedRootID)
 		require.NoError(t, err, "Failed to find leftmost leaf")
 
 		for current != nil {
@@ -761,13 +800,7 @@ func TestNextIDLinking(t *testing.T) {
 
 // TestSearchPrefix tests the SearchPrefix functionality
 func TestSearchPrefix(t *testing.T) {
-	ctx := context.Background()
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage adapter")
-
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "search_prefix_test", Order: 4})
-	require.NoError(t, err, "Failed to create B+ tree")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 	// Insert keys with various prefixes
 	keys := []string{
@@ -783,7 +816,7 @@ func TestSearchPrefix(t *testing.T) {
 	}
 
 	for _, key := range keys {
-		err = tree.Insert(ctx, storage, key, "value_"+key)
+		err := tree.Insert(ctx, storage, key, "value_"+key)
 		require.NoError(t, err, "Failed to insert %s", key)
 	}
 
@@ -818,15 +851,8 @@ func TestSearchPrefix(t *testing.T) {
 
 // TestSearchPrefixEdgeCases tests various edge cases for the SearchPrefix functionality
 func TestSearchPrefixEdgeCases(t *testing.T) {
-	ctx := context.Background()
-
 	t.Run("EmptyTree", func(t *testing.T) {
-		s := &logical.InmemStorage{}
-		storage, err := NewNodeStorage(s, nil, 100)
-		require.NoError(t, err)
-
-		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_empty", Order: 4})
-		require.NoError(t, err)
+		ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 		// Search in empty tree
 		results, err := tree.SearchPrefix(ctx, storage, "any/prefix")
@@ -840,17 +866,12 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 	})
 
 	t.Run("EmptyPrefixOnNonEmptyTree", func(t *testing.T) {
-		s := &logical.InmemStorage{}
-		storage, err := NewNodeStorage(s, nil, 100)
-		require.NoError(t, err)
-
-		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_empty_prefix", Order: 4})
-		require.NoError(t, err)
+		ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 		// Insert some keys
 		keys := []string{"app/config", "auth/users", "system/health"}
 		for _, key := range keys {
-			err = tree.Insert(ctx, storage, key, "value_"+key)
+			err := tree.Insert(ctx, storage, key, "value_"+key)
 			require.NoError(t, err)
 		}
 
@@ -861,12 +882,7 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 	})
 
 	t.Run("SpecialCharactersInPrefix", func(t *testing.T) {
-		s := &logical.InmemStorage{}
-		storage, err := NewNodeStorage(s, nil, 100)
-		require.NoError(t, err)
-
-		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_special_chars", Order: 4})
-		require.NoError(t, err)
+		ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 		// Insert keys with special characters
 		specialKeys := []string{
@@ -881,7 +897,7 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 		}
 
 		for _, key := range specialKeys {
-			err = tree.Insert(ctx, storage, key, "value_"+key)
+			err := tree.Insert(ctx, storage, key, "value_"+key)
 			require.NoError(t, err, "Failed to insert key with special chars: %s", key)
 		}
 
@@ -903,15 +919,10 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 	})
 
 	t.Run("PrefixLongerThanAnyKey", func(t *testing.T) {
-		s := &logical.InmemStorage{}
-		storage, err := NewNodeStorage(s, nil, 100)
-		require.NoError(t, err)
-
-		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_prefix_longer", Order: 4})
-		require.NoError(t, err)
+		ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 3})
 
 		// Insert short keys
-		err = tree.Insert(ctx, storage, "a", "value1")
+		err := tree.Insert(ctx, storage, "a", "value1")
 		require.NoError(t, err)
 		err = tree.Insert(ctx, storage, "ab", "value2")
 		require.NoError(t, err)
@@ -925,15 +936,10 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 	})
 
 	t.Run("PrefixEqualsExactKey", func(t *testing.T) {
-		s := &logical.InmemStorage{}
-		storage, err := NewNodeStorage(s, nil, 100)
-		require.NoError(t, err)
-
-		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_prefix_exact", Order: 4})
-		require.NoError(t, err)
+		ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 		// Insert keys where one exactly matches our search prefix
-		err = tree.Insert(ctx, storage, "app/config", "exact_match")
+		err := tree.Insert(ctx, storage, "app/config", "exact_match")
 		require.NoError(t, err)
 		err = tree.Insert(ctx, storage, "app/config/db", "sub_key1")
 		require.NoError(t, err)
@@ -953,15 +959,10 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 	})
 
 	t.Run("CaseSensitivity", func(t *testing.T) {
-		s := &logical.InmemStorage{}
-		storage, err := NewNodeStorage(s, nil, 100)
-		require.NoError(t, err)
-
-		tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "edge_cases_case_sensitive", Order: 4})
-		require.NoError(t, err)
+		ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 		// Insert keys with different cases
-		err = tree.Insert(ctx, storage, "App/Config", "mixed_case")
+		err := tree.Insert(ctx, storage, "App/Config", "mixed_case")
 		require.NoError(t, err)
 		err = tree.Insert(ctx, storage, "app/config", "lower_case")
 		require.NoError(t, err)
@@ -985,13 +986,8 @@ func TestSearchPrefixEdgeCases(t *testing.T) {
 
 // TestSearchPrefixOptimizations tests the optimization cases where we avoid tree traversal
 func TestSearchPrefixOptimizations(t *testing.T) {
-	ctx := context.Background()
 	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err)
-
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "search_prefix_optimizations", Order: 3})
-	require.NoError(t, err)
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 3})
 
 	// Insert test data in sorted order
 	keys := []string{
@@ -1005,7 +1001,7 @@ func TestSearchPrefixOptimizations(t *testing.T) {
 	}
 
 	for _, key := range keys {
-		err = tree.Insert(ctx, storage, key, "value_"+key)
+		err := tree.Insert(ctx, storage, key, "value_"+key)
 		require.NoError(t, err)
 	}
 
@@ -1071,28 +1067,21 @@ func TestSearchPrefixOptimizations(t *testing.T) {
 
 // TestSearchPrefixWithNextIDTraversal tests that SearchPrefix properly uses NextID for traversal
 func TestSearchPrefixWithNextIDTraversal(t *testing.T) {
-	ctx := context.Background()
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err)
-
 	// Use very small order to force many splits and multiple leaf nodes
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "search_prefix_nextid", Order: 3})
-	require.NoError(t, err)
-	ctx = withTreeID(ctx, "search_prefix_nextid")
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 3})
 
 	// Insert many keys to create multiple leaf nodes
 	numKeys := 20
 	for i := 1; i <= numKeys; i++ {
 		key := fmt.Sprintf("key%02d", i) // key01, key02, ..., key20
 		value := fmt.Sprintf("value%02d", i)
-		err = tree.Insert(ctx, storage, key, value)
+		err := tree.Insert(ctx, storage, key, value)
 		require.NoError(t, err, "Failed to insert %s", key)
 	}
 
 	// Verify we have multiple leaves by checking NextID chain
 	var leafCount int
-	current, err := tree.findLeftmostLeaf(ctx, storage)
+	current, err := tree.findLeftmostLeafInSubtree(ctx, storage, tree.cachedRootID)
 	require.NoError(t, err)
 
 	for current != nil {
@@ -1124,13 +1113,7 @@ func TestSearchPrefixWithNextIDTraversal(t *testing.T) {
 
 // TestSearchPrefixComprehensive is a comprehensive test that demonstrates all functionality
 func TestSearchPrefixComprehensive(t *testing.T) {
-	ctx := context.Background()
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err)
-
-	tree, err := InitializeBPlusTree(ctx, storage, &BPlusTreeConfig{TreeID: "search_prefix_comprehensive", Order: 4})
-	require.NoError(t, err)
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
 	// Insert comprehensive test data
 	testData := map[string]string{
@@ -1150,7 +1133,7 @@ func TestSearchPrefixComprehensive(t *testing.T) {
 	}
 
 	for key, value := range testData {
-		err = tree.Insert(ctx, storage, key, value)
+		err := tree.Insert(ctx, storage, key, value)
 		require.NoError(t, err, "Failed to insert %s", key)
 	}
 

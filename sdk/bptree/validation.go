@@ -16,11 +16,12 @@ type ValidationResult struct {
 
 // TreeStats provides statistics about the tree structure
 type TreeStats struct {
-	TotalNodes             int      `json:"total_nodes"`
-	InternalNodes          int      `json:"internal_nodes"`
-	LeafNodes              int      `json:"leaf_nodes"`
-	TreeHeight             int      `json:"tree_height"`
-	TotalKeys              int      `json:"total_keys"`
+	TotalNodes    int `json:"total_nodes"`
+	InternalNodes int `json:"internal_nodes"`
+	LeafNodes     int `json:"leaf_nodes"`
+	TreeHeight    int `json:"tree_height"`
+	TotalKeys     int `json:"total_keys"`
+	// Can probably be removed;
 	OrphanedKeys           []string `json:"orphaned_keys"`           // Keys in internal nodes not found in leaves
 	InconsistentSeparators []string `json:"inconsistent_separators"` // Separator keys that don't correctly separate subtrees
 }
@@ -285,7 +286,7 @@ func (t *BPlusTree) getMinKeyInSubtree(node *Node, allNodes map[string]*Node) st
 // validateLeafChain checks NextID linking in leaf nodes
 func (t *BPlusTree) validateLeafChain(ctx context.Context, storage Storage, allNodes map[string]*Node, result *ValidationResult) {
 	// Find leftmost leaf
-	leftmost, err := t.findLeftmostLeaf(ctx, storage)
+	leftmost, err := t.findLeftmostLeafInSubtree(ctx, storage, t.cachedRootID)
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("Failed to find leftmost leaf: %v", err))
 		return

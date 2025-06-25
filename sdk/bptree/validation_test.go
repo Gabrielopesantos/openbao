@@ -1,7 +1,6 @@
 package bptree
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -60,14 +59,6 @@ func TestDebugValidateTreeStructure_SeparatorKeyDeletion(t *testing.T) {
 	result, err = tree.DebugValidateTreeStructure(ctx, storage)
 	require.NoError(t, err, "post-deletion validation failed")
 
-	// Expect the OrphanedKeys to contain the deleted separator keys
-	// because we are not removing the entire internal node structure
-	for _, key := range keysToDelete {
-		if !slices.Contains(result.Stats.OrphanedKeys, key) {
-			t.Errorf("Expected orphaned key %s not found after deletion", key)
-		}
-	}
-
-	// Expect a warning for each orphaned key
-	require.Equal(t, 2, len(result.Warnings), "should have one warning about orphaned keys")
+	// Expect no warnings about orphaned keys since cleanup should handle them
+	require.Equal(t, 0, len(result.Warnings), "should have zero warnings about orphaned keys")
 }
