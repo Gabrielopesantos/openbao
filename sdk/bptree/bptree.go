@@ -421,10 +421,10 @@ func (t *BPlusTree) Delete(ctx context.Context, storage Storage, key string) (bo
 	}
 
 	// Clean up orphaned separator keys AFTER rebalancing when tree structure is stable
-	// This should be done as part of the rebalancing process but I couldn't figure out how to do it
-	// and a removal won't necesasrily result in an underflow, so we do it here
-	// THIS IS ALSO VERY EXPENSIVE...PROBABLY BATCH AND EXECUTE SOMETIMES...
-	if err := t.cleanupOrphanedSeparators(ctx, storage, key); err != nil {
+	// Start from the leaf where deletion occurred and work upward through ancestors
+	// THIS IS AN EXPENSIVE OPERATION AND MIGHT BE OPTIMIZED LATER OR BATCHED AND
+	// EXECUTED AS A BACKGROUND JOB
+	if err := t.cleanupOrphanedSplitKey(ctx, storage, leaf, key); err != nil {
 		return false, fmt.Errorf("failed to cleanup orphaned separators: %w", err)
 	}
 
@@ -467,7 +467,7 @@ func (t *BPlusTree) DeleteValue(ctx context.Context, storage Storage, key string
 		}
 
 		// Clean up orphaned separator keys after rebalancing
-		if err := t.cleanupOrphanedSeparators(ctx, storage, key); err != nil {
+		if err := t.cleanupOrphanedSplitKey(ctx, storage, leaf, key); err != nil {
 			return false, fmt.Errorf("failed to cleanup orphaned separators: %w", err)
 		}
 	}
@@ -650,10 +650,13 @@ func (t *BPlusTree) rebalanceTreeIfNeeded(ctx context.Context, storage Storage, 
 	// If this is the root node, handle special root cases
 	if node.ID == rootID {
 		return t.handleRootAfterDeletion(ctx, storage, node)
+	} else if t.nodeUnderflows(node) {
+		// Node underflows, need to rebalance
+		return t.rebalanceAfterDeletion(ctx, storage, node)
 	}
 
-	// Node underflows, need to rebalance
-	return t.rebalanceAfterDeletion(ctx, storage, node)
+	// If this is not the root node and not underflowing, no action needed
+	return nil
 }
 
 // handleRootAfterDeletion handles the root node after deletion
@@ -1031,61 +1034,38 @@ func (t *BPlusTree) findRightmostLeaf(ctx context.Context, storage Storage) (*No
 	return node, nil
 }
 
-// cleanupOrphanedSeparators efficiently cleans up orphaned separator keys
-func (t *BPlusTree) cleanupOrphanedSeparators(ctx context.Context, storage Storage, deletedKey string) error {
-	// We need to search all internal nodes for orphaned separators, but we can
-	// be more efficient by starting from a known point and working systematically
+// cleanupOrphanedSplitKey efficiently cleans up orphaned separator keys by starting from the deletion point
+func (t *BPlusTree) cleanupOrphanedSplitKey(ctx context.Context, storage Storage, startNode *Node, deletedKey string) error {
+	// Start from the leaf node where deletion occurred and walk up through ancestors
+	// Orphaned separators can only exist in the ancestor path of the deleted key
+	currentNode := startNode
 
-	// Get the root to start our search
-	root, err := t.getRoot(ctx, storage)
-	if err != nil {
-		return fmt.Errorf("failed to get root: %w", err)
-	}
-
-	// Do a targeted cleanup - only process internal nodes and stop early when possible
-	return t.cleanupOrphanedSeparatorsInSubtree(ctx, storage, root, deletedKey)
-}
-
-// cleanupOrphanedSeparatorsInSubtree efficiently searches and fixes orphaned separators
-func (t *BPlusTree) cleanupOrphanedSeparatorsInSubtree(ctx context.Context, storage Storage, node *Node, deletedKey string) error {
-	if node == nil || node.IsLeaf {
-		return nil // No separators in leaf nodes
-	}
-
-	// Check if this internal node contains the orphaned separator
-	fixed, err := t.fixOrphanedSeparatorInNode(ctx, storage, node, deletedKey)
-	if err != nil {
-		return fmt.Errorf("failed to fix orphaned separator: %w", err)
-	}
-
-	// If we fixed something and it caused rebalancing, the tree structure may have changed
-	// In that case, we should restart the cleanup to be safe
-	if fixed {
-		// Restart cleanup from root to handle any structural changes
-		root, err := t.getRoot(ctx, storage)
+	for currentNode != nil && currentNode.ParentID != "" {
+		// Load the parent node
+		parent, err := storage.LoadNode(ctx, currentNode.ParentID)
 		if err != nil {
-			return fmt.Errorf("failed to get root after fixing separator: %w", err)
+			return fmt.Errorf("failed to load parent node: %w", err)
 		}
-		return t.cleanupOrphanedSeparatorsInSubtree(ctx, storage, root, deletedKey)
-	}
 
-	// Recursively check children
-	for _, childID := range node.ChildrenIDs {
-		child, err := storage.LoadNode(ctx, childID)
+		// Check if this parent contains the orphaned separator
+		removed, err := t.removeOrphanedSplitKeyInNode(ctx, storage, parent, deletedKey)
 		if err != nil {
-			return fmt.Errorf("failed to load child node: %w", err)
+			return fmt.Errorf("failed to fix orphaned separator: %w", err)
 		}
 
-		if err := t.cleanupOrphanedSeparatorsInSubtree(ctx, storage, child, deletedKey); err != nil {
-			return err
+		if removed {
+			// The orphaned separator was removed and the tree structure possibly restructured
+			break
 		}
+
+		currentNode = parent // Move up to the parent node
 	}
 
 	return nil
 }
 
-// fixOrphanedSeparatorInNode checks and fixes orphaned separator in a single node
-func (t *BPlusTree) fixOrphanedSeparatorInNode(ctx context.Context, storage Storage, node *Node, deletedKey string) (bool, error) {
+// removeOrphanedSplitKeyInNode checks and fixes orphaned separator in a single node
+func (t *BPlusTree) removeOrphanedSplitKeyInNode(ctx context.Context, storage Storage, node *Node, deletedKey string) (bool, error) {
 	if node == nil || node.IsLeaf {
 		return false, nil // No separators in leaf nodes
 	}

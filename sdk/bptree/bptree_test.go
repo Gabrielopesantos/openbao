@@ -292,7 +292,7 @@ func TestBPlusTreeLargeDataSet(t *testing.T) {
 	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 32})
 
 	//  Cleaning up of orphan keys is making this test a lot slower...
-	const numKeys = 5_000
+	const numKeys = 10_000
 
 	// Generate a pseudo-random but deterministic sequence of keys using a simple hash
 	keys := make([]string, numKeys)
@@ -1190,5 +1190,54 @@ func TestSearchPrefixComprehensive(t *testing.T) {
 				require.NotContains(t, results, key, "Should not contain %s for prefix %s", key, tc.prefix)
 			}
 		})
+	}
+}
+
+func TestRebalanceTOBEDELETED(t *testing.T) {
+	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 3})
+
+	keys := []string{"1", "2", "3", "4", "5"}
+	// Insert keys
+	for _, key := range keys {
+		err := tree.Insert(ctx, storage, key, keyValue(key))
+		require.NoError(t, err, "Insert failed for key: %s", key)
+	}
+
+	// Verify keys
+	for _, key := range keys {
+		value, found, err := tree.Search(ctx, storage, key)
+		require.NoError(t, err, "Search failed for key: %s", key)
+		require.True(t, found, "Key %s not found", key)
+		require.Equal(t, []string{keyValue(key)}, value, "Wrong value for key %s", key)
+	}
+
+	_, err := tree.DebugValidateTreeStructure(ctx, storage)
+	require.NoError(t, err, "Validation failed")
+
+	// Delete 4
+	deleted, err := tree.Delete(ctx, storage, "4")
+	require.NoError(t, err, "Delete failed for key: %s", "4")
+	require.True(t, deleted, "Key %s not deleted", "4")
+
+	_, err = tree.DebugValidateTreeStructure(ctx, storage)
+	require.NoError(t, err, "Validation failed")
+
+	// Delete 3
+	deleted, err = tree.Delete(ctx, storage, "3")
+	require.NoError(t, err, "Delete failed for key: %s", "3")
+	require.True(t, deleted, "Key %s not deleted", "3")
+
+	_, err = tree.DebugValidateTreeStructure(ctx, storage)
+	require.NoError(t, err, "Validation failed")
+
+	// Verify keys after deletion
+	for _, key := range keys {
+		if key == "4" || key == "3" {
+			continue
+		}
+		value, found, err := tree.Search(ctx, storage, key)
+		require.NoError(t, err, "Search failed for key: %s", key)
+		require.True(t, found, "Key %s not found", key)
+		require.Equal(t, []string{keyValue(key)}, value, "Wrong value for key %s", key)
 	}
 }

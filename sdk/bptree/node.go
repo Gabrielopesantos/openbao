@@ -15,10 +15,10 @@ const (
 	KeyRemoved
 	// KeyNotFound indicates the key was not found
 	KeyNotFound
-	// ValueNotFound indicates the value was not found for the key
-	ValueNotFound
 	// ValueRemoved indicates a value was removed but the key still exists
 	ValueRemoved
+	// ValueNotFound indicates the value was not found for the key
+	ValueNotFound
 )
 
 var (
