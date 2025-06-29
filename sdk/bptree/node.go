@@ -47,9 +47,8 @@ type Node struct {
 	Values      [][]string `json:"values"`      // Only for leaf nodes
 	ChildrenIDs []string   `json:"childrenIDs"` // Only for internal nodes
 	ParentID    string     `json:"parentID"`
-	NextID      string     `json:"nextID"` // ID of the next leaf node
-	// TODO (gabrielopesantos): Set
-	PreviousID string `json:"previousID"` // ID of the previous leaf node
+	NextID      string     `json:"nextID"`     // ID of the next leaf node
+	PreviousID  string     `json:"previousID"` // ID of the previous leaf node
 }
 
 // NewLeafNode creates a new leaf node

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -690,6 +691,7 @@ func TestBPlusTreeDeleteValue(t *testing.T) {
 	require.False(t, deleted, "DeleteValue should return false for non-existent key")
 }
 
+// TODO: This isn't complete enough...
 func TestBPlusTreeDuplicateValues(t *testing.T) {
 	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 4})
 
@@ -727,36 +729,40 @@ func TestBPlusTreeDuplicateValues(t *testing.T) {
 	require.Contains(t, values, "value3")
 }
 
-// TestNextIDLinking tests that the NextID field is properly set during leaf operations
-func TestNextIDLinking(t *testing.T) {
+// TestLeafNodeLinking tests that the NextID and PreviousID fields are properly set during leaf operations
+func TestLeafNodeLinking(t *testing.T) {
 	ctx, storage, tree := initTest(t, &BPlusTreeConfig{Order: 3})
 
 	t.Run("SingleLeafNode", func(t *testing.T) {
 		// Insert into root leaf - should have empty NextID initially
-		err := tree.Insert(ctx, storage, "key1", "value1")
-		require.NoError(t, err, "Failed to insert key1")
+		err := tree.Insert(ctx, storage, "0", "value0")
+		require.NoError(t, err, "Failed to insert key0")
 
 		root, err := tree.getRoot(ctx, storage)
 		require.NoError(t, err, "Failed to get root")
 		require.True(t, root.IsLeaf, "Root should be a leaf")
 		require.Empty(t, root.NextID, "Single leaf should have empty NextID")
+		require.Empty(t, root.PreviousID, "Single leaf should have empty PreviousID")
 	})
 
 	t.Run("LeafSplitCreatesTwoLinkedLeaves", func(t *testing.T) {
 		// Insert more keys to force a leaf split
-		err := tree.Insert(ctx, storage, "key2", "value2")
+		err := tree.Insert(ctx, storage, "1", "value1")
+		require.NoError(t, err, "Failed to insert key1")
+
+		// This should cause a leaf split (order=3, so max 2 keys per leaf)
+		err = tree.Insert(ctx, storage, "2", "value2")
 		require.NoError(t, err, "Failed to insert key2")
 
-		// This should cause a leaf split (order=2, so max 2 keys per leaf)
-		err = tree.Insert(ctx, storage, "key3", "value3")
-		require.NoError(t, err, "Failed to insert key3")
-
 		// Find the leftmost leaf
-		leftmost, err := tree.findLeftmostLeafInSubtree(ctx, storage, tree.cachedRootID)
+		leftmost, err := tree.findLeftmostLeaf(ctx, storage)
 		require.NoError(t, err, "Failed to find leftmost leaf")
 
 		// Verify the leaf has a NextID
 		require.NotEmpty(t, leftmost.NextID, "Leftmost leaf should have NextID after split")
+
+		// Verify the leaf has a PreviousID
+		require.Empty(t, leftmost.PreviousID, "Leftmost leaf should have empty PreviousID")
 
 		// Load the next leaf
 		rightLeaf, err := storage.LoadNode(ctx, leftmost.NextID)
@@ -766,21 +772,25 @@ func TestNextIDLinking(t *testing.T) {
 		// The rightmost leaf should have empty NextID
 		require.Empty(t, rightLeaf.NextID, "Rightmost leaf should have empty NextID")
 
+		// Verify the leaf has a PreviousID
+		require.NotEmpty(t, rightLeaf.PreviousID, "Rightmost leaf should have PreviousID")
+
 		// Verify keys are properly distributed
 		allKeys := append(leftmost.Keys, rightLeaf.Keys...)
-		require.ElementsMatch(t, []string{"key1", "key2", "key3"}, allKeys, "All keys should be present across leaves")
+		require.ElementsMatch(t, []string{"0", "1", "2"}, allKeys, "All keys should be present across leaves")
 	})
 
-	t.Run("SequentialTraversalWorks", func(t *testing.T) {
+	t.Run("NextIDSequentialTraversal", func(t *testing.T) {
 		// Insert more keys to create multiple leaf splits
-		for i := 4; i <= 10; i++ {
-			err := tree.Insert(ctx, storage, "key"+string(rune('0'+i)), "value"+string(rune('0'+i)))
+		for i := 3; i <= 9; i++ {
+			key := strconv.Itoa(i)
+			err := tree.Insert(ctx, storage, key, keyValue(key))
 			require.NoError(t, err, "Failed to insert key%d", i)
 		}
 
-		// Traverse through all leaves using NextID
 		var allKeys []string
-		current, err := tree.findLeftmostLeafInSubtree(ctx, storage, tree.cachedRootID)
+		// Traverse through all leaves using NextID
+		current, err := tree.findLeftmostLeaf(ctx, storage)
 		require.NoError(t, err, "Failed to find leftmost leaf")
 
 		for current != nil {
@@ -793,7 +803,29 @@ func TestNextIDLinking(t *testing.T) {
 		}
 
 		// Verify all keys are present and in order
-		expectedKeys := []string{"key1", "key2", "key3", "key4", "key5", "key6", "key7", "key8", "key9", "key:"}
+		expectedKeys := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+		require.Equal(t, expectedKeys, allKeys, "Keys should be in sorted order through leaf traversal")
+	})
+
+	t.Run("PreviousIDSequentialTraversal", func(t *testing.T) {
+		var allKeys []string
+		// Traverse through all leaves using PreviousID
+		current, err := tree.findRightmostLeaf(ctx, storage)
+		require.NoError(t, err, "Failed to find leftmost leaf")
+
+		for current != nil {
+			slices.Reverse(current.Keys) // Revert the slice for the order to be correct...
+			allKeys = append(allKeys, current.Keys...)
+			if current.PreviousID == "" {
+				break
+			}
+
+			current, err = storage.LoadNode(ctx, current.PreviousID)
+			require.NoError(t, err, "Failed to load previous leaf")
+		}
+
+		// Verify all keys are present and in order
+		expectedKeys := []string{"9", "8", "7", "6", "5", "4", "3", "2", "1", "0"}
 		require.Equal(t, expectedKeys, allKeys, "Keys should be in sorted order through leaf traversal")
 	})
 }
@@ -1081,7 +1113,7 @@ func TestSearchPrefixWithNextIDTraversal(t *testing.T) {
 
 	// Verify we have multiple leaves by checking NextID chain
 	var leafCount int
-	current, err := tree.findLeftmostLeafInSubtree(ctx, storage, tree.cachedRootID)
+	current, err := tree.findLeftmostLeaf(ctx, storage)
 	require.NoError(t, err)
 
 	for current != nil {

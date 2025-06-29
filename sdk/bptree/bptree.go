@@ -254,12 +254,13 @@ func (t *BPlusTree) SearchPrefix(ctx context.Context, storage Storage, prefix st
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 
+	ctx = t.contextWithTreeID(ctx)
+
 	rootID, err := t.getRootID(ctx, storage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root ID: %w", err)
 	}
 
-	ctx = t.contextWithTreeID(ctx)
 	results := make(map[string][]string)
 
 	// Handle empty prefix - we don't allow this as it would return all keys which is expensive
@@ -341,8 +342,9 @@ func (t *BPlusTree) SearchPrefix(ctx context.Context, storage Storage, prefix st
 	return results, nil
 }
 
-// RangeSearch returns all key-value pairs within the specified range [start, end)
-// func (t *BPlusTree) RangeSearch(ctx context.Context, storage Storage, start string, end string) (map[string][]string, error) {
+// TODO: Instead of all these methods we can probably have a single method with an opts struct
+// SearchRange returns all key-value pairs within the specified range [start, end)
+// func (t *BPlusTree) SearchRange(ctx context.Context, storage Storage, start string, end string) (map[string][]string, error) {
 // 	return nil, nil
 // }
 
@@ -522,6 +524,9 @@ func (t *BPlusTree) splitLeafNode(leaf *Node) (*Node, string) {
 	newLeaf.NextID = leaf.NextID
 	// The original leaf should now point to the new leaf
 	leaf.NextID = newLeaf.ID
+
+	// Set up PreviousID linking: newLeaf should point to what the original leaf
+	newLeaf.PreviousID = leaf.ID
 
 	// Set parent reference for the new leaf
 	newLeaf.ParentID = leaf.ParentID
@@ -1011,29 +1016,6 @@ func (t *BPlusTree) mergeWithRightSibling(ctx context.Context, storage Storage, 
 	return t.rebalanceTreeIfNeeded(ctx, storage, parent)
 }
 
-// findRightmostLeaf finds the rightmost leaf node in the tree
-func (t *BPlusTree) findRightmostLeaf(ctx context.Context, storage Storage) (*Node, error) {
-	// Load the root node
-	node, err := t.getRoot(ctx, storage)
-	if err != nil {
-		return nil, err
-	}
-
-	for !node.IsLeaf {
-		// Always go to the rightmost child
-		if len(node.ChildrenIDs) == 0 {
-			return nil, errors.New("internal node has no children")
-		}
-		rightmostIndex := len(node.ChildrenIDs) - 1
-		node, err = storage.LoadNode(ctx, node.ChildrenIDs[rightmostIndex])
-		if err != nil {
-			return nil, fmt.Errorf("failed to load child node: %w", err)
-		}
-	}
-
-	return node, nil
-}
-
 // cleanupOrphanedSplitKey efficiently cleans up orphaned separator keys by starting from the deletion point
 func (t *BPlusTree) cleanupOrphanedSplitKey(ctx context.Context, storage Storage, startNode *Node, deletedKey string) error {
 	// Start from the leaf node where deletion occurred and walk up through ancestors
@@ -1159,9 +1141,53 @@ func (t *BPlusTree) findSuccessorKey(ctx context.Context, storage Storage, paren
 	return leftmostLeaf.Keys[0], nil
 }
 
+// findRightmostLeaf finds the rightmost leaf node in the tree
+func (t *BPlusTree) findRightmostLeaf(ctx context.Context, storage Storage) (*Node, error) {
+	// Load the root node
+	rootID, err := t.getRootID(ctx, storage)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.findRightmostLeafInSubtree(ctx, storage, rootID)
+}
+
+// findRightmostLeaf finds the rightmost leaf node in the tree
+func (t *BPlusTree) findRightmostLeafInSubtree(ctx context.Context, storage Storage, nodeID string) (*Node, error) {
+	node, err := storage.LoadNode(ctx, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load node: %w", err)
+	}
+
+	for !node.IsLeaf {
+		// Always go to the rightmost child
+		if len(node.ChildrenIDs) == 0 {
+			return nil, errors.New("internal node has no children")
+		}
+		rightmostIndex := len(node.ChildrenIDs) - 1
+		node, err = storage.LoadNode(ctx, node.ChildrenIDs[rightmostIndex])
+		if err != nil {
+			return nil, fmt.Errorf("failed to load child node: %w", err)
+		}
+	}
+
+	return node, nil
+}
+
+// findLeftmostLeaf finds the leftmost leaf node in the tree
+func (t *BPlusTree) findLeftmostLeaf(ctx context.Context, storage Storage) (*Node, error) {
+	// Load the root node
+	rootID, err := t.getRootID(ctx, storage)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.findLeftmostLeafInSubtree(ctx, storage, rootID)
+}
+
 // findLeftmostLeafInSubtree finds the leftmost leaf node in a subtree rooted at the given node ID
-func (t *BPlusTree) findLeftmostLeafInSubtree(ctx context.Context, storage Storage, rootID string) (*Node, error) {
-	node, err := storage.LoadNode(ctx, rootID)
+func (t *BPlusTree) findLeftmostLeafInSubtree(ctx context.Context, storage Storage, nodeID string) (*Node, error) {
+	node, err := storage.LoadNode(ctx, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load node: %w", err)
 	}
