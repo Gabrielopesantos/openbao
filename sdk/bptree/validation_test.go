@@ -1,3 +1,6 @@
+// Copyright (c) 2024 OpenBao a Series of LF Projects, LLC
+// SPDX-License-Identifier: MPL-2.0
+
 package bptree
 
 import (
@@ -28,7 +31,7 @@ func TestDebugValidateTreeStructure_BasicValidation(t *testing.T) {
 	require.Equal(t, 4, result.Stats.InternalNodes, "tree should have correct number of internal nodes")
 	require.Equal(t, 7, result.Stats.LeafNodes, "tree should have correct number of leaf nodes")
 	require.Equal(t, 11, result.Stats.TotalNodes, "tree should have correct total nodes")
-	// require.Equal(t, 3, result.Stats.TreeHeight, "tree should have correct height")
+	require.Equal(t, 3, result.Stats.TreeHeight, "tree should have correct height")
 }
 
 func TestDebugValidateTreeStructure_SeparatorKeyDeletion(t *testing.T) {

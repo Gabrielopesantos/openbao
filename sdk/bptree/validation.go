@@ -1,3 +1,6 @@
+// Copyright (c) 2024 OpenBao a Series of LF Projects, LLC
+// SPDX-License-Identifier: MPL-2.0
+
 package bptree
 
 import (
@@ -16,12 +19,11 @@ type ValidationResult struct {
 
 // TreeStats provides statistics about the tree structure
 type TreeStats struct {
-	TotalNodes    int `json:"total_nodes"`
-	InternalNodes int `json:"internal_nodes"`
-	LeafNodes     int `json:"leaf_nodes"`
-	TreeHeight    int `json:"tree_height"`
-	TotalKeys     int `json:"total_keys"`
-	// Can probably be removed;
+	TotalNodes             int      `json:"total_nodes"`
+	InternalNodes          int      `json:"internal_nodes"`
+	LeafNodes              int      `json:"leaf_nodes"`
+	TreeHeight             int      `json:"tree_height"`
+	TotalKeys              int      `json:"total_keys"`
 	OrphanedKeys           []string `json:"orphaned_keys"`           // Keys in internal nodes not found in leaves
 	InconsistentSeparators []string `json:"inconsistent_separators"` // Separator keys that don't correctly separate subtrees
 }
@@ -56,6 +58,13 @@ func (t *BPlusTree) DebugValidateTreeStructure(ctx context.Context, storage Stor
 	if err := t.collectAllNodes(ctx, storage, root, allNodes, leafKeys, internalKeys, &result.Stats); err != nil {
 		return nil, fmt.Errorf("failed to collect nodes: %w", err)
 	}
+
+	// Calculate tree height
+	height, err := t.getTreeHeight(ctx, storage, root)
+	if err != nil {
+		return nil, err
+	}
+	result.Stats.TreeHeight = height
 
 	// Validate tree structure
 	t.validateStructuralIntegrity(allNodes, root.ID, result)
@@ -110,6 +119,26 @@ func (t *BPlusTree) collectAllNodes(ctx context.Context, storage Storage, node *
 	}
 
 	return nil
+}
+
+// getTreeHeight calculates the height of the tree
+func (t *BPlusTree) getTreeHeight(ctx context.Context, storage Storage, node *Node) (int, error) {
+	if node == nil {
+		return 0, errors.New("nil node provided for height calculation")
+	}
+
+	height := 1
+	for !node.IsLeaf {
+		child, err := storage.LoadNode(ctx, node.ChildrenIDs[0])
+		if err != nil {
+			return 0, fmt.Errorf("failed to load child node %s: %w", node.ChildrenIDs[0], err)
+		}
+
+		height += 1
+		node = child
+	}
+
+	return height, nil
 }
 
 // validateStructuralIntegrity checks parent-child relationships and basic structure
