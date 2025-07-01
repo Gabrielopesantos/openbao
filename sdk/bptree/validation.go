@@ -315,7 +315,7 @@ func (t *BPlusTree) getMinKeyInSubtree(node *Node, allNodes map[string]*Node) st
 // validateLeafChain checks NextID linking in leaf nodes
 func (t *BPlusTree) validateLeafChain(ctx context.Context, storage Storage, allNodes map[string]*Node, result *ValidationResult) {
 	// Find leftmost leaf
-	leftmost, err := t.findLeftmostLeafInSubtree(ctx, storage, t.cachedRootID)
+	leftmost, err := t.findLeftmostLeaf(ctx, storage)
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("Failed to find leftmost leaf: %v", err))
 		return

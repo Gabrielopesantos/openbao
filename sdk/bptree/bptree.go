@@ -15,9 +15,8 @@ import (
 
 // BPlusTree represents a B+ tree data structure
 type BPlusTree struct {
-	config       *BPlusTreeConfig // B+Tree configuration
-	lock         sync.RWMutex     // Mutex to protect concurrent access
-	cachedRootID string           // Cached root ID
+	config *BPlusTreeConfig // B+Tree configuration
+	lock   sync.RWMutex     // Mutex to protect concurrent access
 }
 
 // InitializeBPlusTree initializes a tree, creating it if it doesn't exist or loading it if it does.
@@ -155,34 +154,25 @@ func (t *BPlusTree) getRoot(ctx context.Context, storage Storage) (*Node, error)
 	return storage.LoadNode(ctx, rootID)
 }
 
-// getRootID returns the root ID, using cache when possible
+// TODO: Can be removed...
+// getRootID returns the root ID
 func (t *BPlusTree) getRootID(ctx context.Context, storage Storage) (string, error) {
-	// Check if we have a valid cached root ID
-	if t.cachedRootID != "" {
-		return t.cachedRootID, nil
-	}
-
 	// Load from storage and cache
 	rootID, err := storage.GetRootID(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	// Update cache
-	t.cachedRootID = rootID
-
 	return rootID, nil
 }
 
+// TODO: Can be removed...
 // setRootID updates both storage and cache
 func (t *BPlusTree) setRootID(ctx context.Context, storage Storage, newRootID string) error {
 	// Update storage first
 	if err := storage.SetRootID(ctx, newRootID); err != nil {
 		return err
 	}
-
-	// Update cache on successful storage update
-	t.cachedRootID = newRootID
 
 	return nil
 }

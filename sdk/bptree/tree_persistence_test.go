@@ -4,22 +4,17 @@
 package bptree
 
 import (
-	"context"
 	"testing"
 
-	"github.com/openbao/openbao/sdk/v2/logical"
 	"github.com/stretchr/testify/require"
 )
 
 // TestTreePersistenceAndLoading tests various tree initialization scenarios
 func TestTreePersistenceAndLoading(t *testing.T) {
-	ctx := context.Background()
-	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
-	require.NoError(t, err, "Failed to create storage")
+	ctx, storage, _ := initTest(t, nil)
 
 	t.Run("AutomaticTreeCreation", func(t *testing.T) {
-		// OpenTree should automatically create a new tree when none exists
+		// InitializeBPlusTree should automatically create a new tree when none exists
 		config, err := NewBPlusTreeConfig("auto_tree", 4)
 		require.NoError(t, err)
 
@@ -57,6 +52,14 @@ func TestTreePersistenceAndLoading(t *testing.T) {
 			require.NoError(t, err, "Failed to insert %s", key)
 		}
 
+		// Verify data is accessible
+		for key, expectedValue := range testData {
+			values, found, err := tree1.Search(ctx, storage, key)
+			require.NoError(t, err, "Error getting key %s", key)
+			require.True(t, found, "Should find key %s", key)
+			require.Equal(t, []string{expectedValue}, values, "Value mismatch for key %s", key)
+		}
+
 		// Now "restart" by loading the existing tree
 		tree2, err := LoadExistingBPlusTree(ctx, storage, "persistent_tree")
 		require.NoError(t, err, "Should load existing tree automatically")
@@ -78,6 +81,12 @@ func TestTreePersistenceAndLoading(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, []string{"value4"}, values)
+
+		// Check key4 is available on the original tree as well
+		values, found, err = tree1.Search(ctx, storage, "key4")
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, []string{"value4"}, values, "Key4 should be available on both trees after insert")
 	})
 
 	t.Run("ExplicitTreeCreation", func(t *testing.T) {
@@ -191,7 +200,7 @@ func TestTreePersistenceAndLoading(t *testing.T) {
 	t.Run("TreeConfigValidation", func(t *testing.T) {
 		// Test various config validation scenarios
 
-		// Nil config should use defaults with OpenTree
+		// Nil config should use defaults with InitializeBPlusTree
 		tree, err := InitializeBPlusTree(ctx, storage, nil)
 		require.NoError(t, err, "Should accept nil config and use defaults")
 		require.NotNil(t, tree)
@@ -201,7 +210,7 @@ func TestTreePersistenceAndLoading(t *testing.T) {
 		_, err = InitializeBPlusTree(ctx, storage, invalidConfig)
 		require.Error(t, err, "Should fail with invalid order")
 
-		// CreateNewTree with nil config should fail
+		// NewBPlusTree with nil config should fail
 		_, err = NewBPlusTree(ctx, storage, nil)
 		require.Error(t, err, "CreateNewTree should require config")
 
