@@ -243,6 +243,8 @@ func (t *BPlusTree) search(ctx context.Context, storage Storage, key string) ([]
 // SearchPrefix returns all key-value pairs that start with the given prefix
 // This function leverages the NextID linking to efficiently traverse leaf nodes sequentially
 // No wildcards searches are supported - only exact prefix matches
+// TODO (gabrielopesantos): Having some sort of limit on the number of results.
+// TODO (gabrielopesantos): If the keys aren't strings, this function will not work as expected.
 func (t *BPlusTree) SearchPrefix(ctx context.Context, storage Storage, prefix string) (map[string][]string, error) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()

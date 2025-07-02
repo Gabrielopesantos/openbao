@@ -20,7 +20,7 @@ func initTest(t *testing.T, treeConfig *BPlusTreeConfig) (context.Context, *Node
 	ctx := context.Background()
 	// Initialize in-memory storage for testing
 	s := &logical.InmemStorage{}
-	storage, err := NewNodeStorage(s, nil, 100)
+	storage, err := NewNodeStorage(s, nil, 1_000)
 	require.NoError(t, err, "failed to create storage")
 
 	if treeConfig == nil {

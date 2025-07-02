@@ -44,9 +44,11 @@ var (
 
 // Node represents a node in the B+ tree
 type Node struct {
-	ID          string     `json:"id"`
-	IsLeaf      bool       `json:"isLeaf"`
-	Keys        []string   `json:"keys"`
+	ID     string `json:"id"`
+	IsLeaf bool   `json:"isLeaf"`
+	// NOTE (gabrilopesantos): Consider making keys a generic type instead of string
+	Keys []string `json:"keys"`
+	// NOTE (gabrielopesantos): Have some limit in the number of values per key?
 	Values      [][]string `json:"values"`      // Only for leaf nodes
 	ChildrenIDs []string   `json:"childrenIDs"` // Only for internal nodes
 	ParentID    string     `json:"parentID"`
