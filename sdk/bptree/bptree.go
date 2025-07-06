@@ -626,6 +626,7 @@ func (t *BPlusTree) splitInternalNode(ctx context.Context, storage Storage, node
 	for _, childID := range newInternal.ChildrenIDs {
 		child, err := storage.LoadNode(ctx, childID)
 		if err != nil {
+			// TODO: Review...
 			// Log error but continue since we can't fail here
 			continue
 		}
@@ -1062,7 +1063,7 @@ func (t *BPlusTree) removeOrphanedSplitKeyInNode(ctx context.Context, storage St
 
 	// Found orphaned separator, try to replace it with successor
 	successor, err := t.findSuccessorKey(ctx, storage, node, separatorIndex)
-	if err != nil {
+	if err != nil { // TODO: Not on all errors...
 		// No right subtree available, remove the separator key entirely
 		node.Keys = slices.Delete(node.Keys, separatorIndex, separatorIndex+1)
 		// Also remove the corresponding child pointer
